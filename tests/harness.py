@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import http.server
+import json
 import os
 import pathlib
 import socketserver
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -88,6 +90,66 @@ def run_browser_smoke(profile: pathlib.Path, url: str) -> subprocess.CompletedPr
     return run_browser(
         "--smoke", "--profile-dir", str(profile), "--start-url", url, expect_code=0
     )
+
+
+def run_browser_storage_check(profile: pathlib.Path) -> dict[str, Any]:
+    """Run the head-less profile check and return its JSON output."""
+    result = run_browser(
+        "--storage-check", "--profile-dir", str(profile), expect_code=0
+    )
+    return json.loads(result.stdout)
+
+
+def write_legacy_v1_database(path: pathlib.Path) -> None:
+    """Create a schema-1 database the way the first slice wrote it.
+
+    The first slice stored a single row in a `session` table and stamped
+    user_version 1, so a migration test has to reproduce that shape exactly.
+    """
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "CREATE TABLE session (id INTEGER PRIMARY KEY, url TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO session(id, url) VALUES (1, 'https://legacy.example/')"
+        )
+        connection.execute(
+            """CREATE TABLE session_tabs (
+                 id INTEGER PRIMARY KEY,
+                 position INTEGER NOT NULL CHECK (position >= 0),
+                 url TEXT NOT NULL,
+                 title TEXT NOT NULL,
+                 selected INTEGER NOT NULL CHECK (selected IN (0, 1))
+             )"""
+        )
+        connection.execute("PRAGMA user_version = 1")
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def read_database(path: pathlib.Path) -> dict[str, Any]:
+    """Read back the facts a migration has to get right."""
+    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        tabs = connection.execute(
+            "SELECT id, position, url, title, selected FROM session_tabs"
+            " ORDER BY position, id"
+        ).fetchall()
+        return {
+            "user_version": connection.execute("PRAGMA user_version").fetchone()[0],
+            "tables": sorted(tables),
+            "session_tabs": tabs,
+        }
+    finally:
+        connection.close()
 
 
 def temporary_profile() -> tempfile.TemporaryDirectory[str]:

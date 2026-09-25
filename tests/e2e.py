@@ -19,9 +19,12 @@ from harness import (
     BINARY,
     LocalFixtureServer,
     ROOT,
+    read_database,
     run_browser,
     run_browser_smoke,
+    run_browser_storage_check,
     temporary_profile,
+    write_legacy_v1_database,
 )
 
 
@@ -221,6 +224,52 @@ def main() -> int:
                 "database_mode_after": database_mode,
                 "sidecars_after": sidecars,
             },
+        )
+
+    # Bookmarks and history are profile stores, so they are verified head-lessly
+    # rather than through the window.
+    with temporary_profile() as stores_dir:
+        stores = pathlib.Path(stores_dir)
+        storage_data = run_browser_storage_check(stores)
+        expected = {
+            "ok": True,
+            "schema_version": 2,
+            "bookmark_first_add": True,
+            "bookmark_duplicate_add": False,
+            "bookmark_stored_title": "Example, renamed",
+            "bookmark_found": True,
+            "bookmark_removed": True,
+            "bookmark_after_removal": False,
+            "history_first_visit": True,
+            "history_repeat_visit": False,
+            "history_len": 2,
+            "history_newest": "https://second.example/",
+            "history_cleared": 2,
+            "history_after_clear": 0,
+            "bookmark_rejects_file_url": True,
+        }
+        record(
+            checks,
+            "bookmarks_and_history_behaviour",
+            all(storage_data.get(key) == value for key, value in expected.items()),
+            {"expected": expected, "observed": storage_data},
+        )
+
+    # A schema-1 profile written by the first slice must migrate in place: the
+    # legacy row is kept, the legacy table is dropped, and the version advances.
+    with temporary_profile() as legacy_dir:
+        legacy = pathlib.Path(legacy_dir)
+        write_legacy_v1_database(legacy / "session.sqlite")
+        migrated = run_browser_storage_check(legacy)
+        after = read_database(legacy / "session.sqlite")
+        record(
+            checks,
+            "schema_v1_migrates_without_losing_the_session_row",
+            after["user_version"] == 2
+            and "session" not in after["tables"]
+            and any(row[2] == "https://legacy.example/" for row in after["session_tabs"])
+            and migrated.get("ok") is True,
+            {"after_migration": after, "check": migrated.get("ok")},
         )
 
     help_result = run_browser("--help", expect_code=0)

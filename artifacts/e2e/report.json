@@ -84,6 +84,71 @@
     },
     {
       "details": {
+        "expected": {
+          "bookmark_after_removal": false,
+          "bookmark_duplicate_add": false,
+          "bookmark_first_add": true,
+          "bookmark_found": true,
+          "bookmark_rejects_file_url": true,
+          "bookmark_removed": true,
+          "bookmark_stored_title": "Example, renamed",
+          "history_after_clear": 0,
+          "history_cleared": 2,
+          "history_first_visit": true,
+          "history_len": 2,
+          "history_newest": "https://second.example/",
+          "history_repeat_visit": false,
+          "ok": true,
+          "schema_version": 2
+        },
+        "observed": {
+          "bookmark_after_removal": false,
+          "bookmark_duplicate_add": false,
+          "bookmark_first_add": true,
+          "bookmark_found": true,
+          "bookmark_rejects_file_url": true,
+          "bookmark_removed": true,
+          "bookmark_stored_title": "Example, renamed",
+          "history_after_clear": 0,
+          "history_cleared": 2,
+          "history_first_visit": true,
+          "history_len": 2,
+          "history_newest": "https://second.example/",
+          "history_repeat_visit": false,
+          "ok": true,
+          "schema_version": 2
+        }
+      },
+      "name": "bookmarks_and_history_behaviour",
+      "passed": true
+    },
+    {
+      "details": {
+        "after_migration": {
+          "session_tabs": [
+            [
+              1,
+              0,
+              "https://legacy.example/",
+              "Restored Tab",
+              1
+            ]
+          ],
+          "tables": [
+            "bookmarks",
+            "history",
+            "session_tabs",
+            "sqlite_sequence"
+          ],
+          "user_version": 2
+        },
+        "check": true
+      },
+      "name": "schema_v1_migrates_without_losing_the_session_row",
+      "passed": true
+    },
+    {
+      "details": {
         "help_code": 0,
         "missing_value_code": 2,
         "unknown_code": 2,

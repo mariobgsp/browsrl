@@ -52,6 +52,7 @@ pub struct Config {
     pub search_endpoint: Option<String>,
     pub restore_session: bool,
     pub smoke: bool,
+    pub storage_check: bool,
 }
 
 impl Config {
@@ -80,6 +81,7 @@ impl Config {
         let mut search_endpoint = None;
         let mut restore_session = true;
         let mut smoke = false;
+        let mut storage_check = false;
 
         let mut args = arguments.into_iter();
         while let Some(argument) = args.next() {
@@ -122,6 +124,8 @@ impl Config {
                 }
                 "--no-restore" => restore_session = false,
                 "--smoke" => smoke = true,
+                // Head-less exercise of bookmarks, history and the schema.
+                "--storage-check" => storage_check = true,
                 "-h" | "--help" => return Err(CliError::success(usage())),
                 "-V" | "--version" => {
                     return Err(CliError::success(format!(
@@ -156,6 +160,7 @@ impl Config {
             search_endpoint,
             restore_session,
             smoke,
+            storage_check,
         })
     }
 
@@ -234,7 +239,7 @@ pub fn usage() -> String {
     concat!(
         "Usage: rbrowse [--profile-dir PATH] [--database-path PATH] [--data-dir PATH] ",
         "[--cache-dir PATH] [--start-url URL] [--search-endpoint URL] [--no-restore] ",
-        "[--smoke]"
+        "[--smoke] [--storage-check]"
     )
     .to_string()
 }

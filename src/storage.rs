@@ -7,7 +7,11 @@ use url::Url;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-const SCHEMA_VERSION: i64 = 1;
+use crate::{bookmarks, history};
+
+/// Bumped whenever the tables below change; `migrate_schema` refuses to open a
+/// database written by a newer build.
+const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionTab {
@@ -121,6 +125,52 @@ impl SessionStore {
             .commit()
             .map_err(|error| format!("commit session transaction: {error}"))
     }
+
+    // ---- Bookmarks ---------------------------------------------------------
+
+    /// Bookmark a URL. Returns `false` when it was already bookmarked, in
+    /// which case the stored title is refreshed instead.
+    pub fn add_bookmark(&self, url: &str, title: &str) -> Result<bool, String> {
+        bookmarks::add(&self.connection, url, title)
+    }
+
+    pub fn remove_bookmark(&self, url: &str) -> Result<bool, String> {
+        bookmarks::remove(&self.connection, url)
+    }
+
+    pub fn is_bookmarked(&self, url: &str) -> Result<bool, String> {
+        bookmarks::contains(&self.connection, url)
+    }
+
+    pub fn bookmarks(&self) -> Result<Vec<bookmarks::Bookmark>, String> {
+        bookmarks::list(&self.connection)
+    }
+
+    // ---- History -----------------------------------------------------------
+
+    /// Record a completed page load. Returns `true` for a new entry and
+    /// `false` when the visit collapsed into an existing one.
+    pub fn record_visit(&self, url: &str, title: &str) -> Result<bool, String> {
+        history::record(&self.connection, url, title)
+    }
+
+    pub fn history(&self, limit: i64) -> Result<Vec<history::HistoryEntry>, String> {
+        history::list(&self.connection, limit)
+    }
+
+    pub fn history_len(&self) -> Result<i64, String> {
+        history::count(&self.connection)
+    }
+
+    pub fn clear_history(&self) -> Result<usize, String> {
+        history::clear(&self.connection)
+    }
+
+    pub fn schema_version(&self) -> Result<i64, String> {
+        self.connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .map_err(|error| format!("read schema version: {error}"))
+    }
 }
 
 fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
@@ -146,7 +196,22 @@ fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
                  selected INTEGER NOT NULL CHECK (selected IN (0, 1))
              );
              CREATE INDEX IF NOT EXISTS session_tabs_position
-                 ON session_tabs(position);",
+                 ON session_tabs(position);
+             CREATE TABLE IF NOT EXISTS bookmarks (
+                 url TEXT PRIMARY KEY,
+                 title TEXT NOT NULL,
+                 created_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS history (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 url TEXT NOT NULL,
+                 title TEXT NOT NULL,
+                 visited_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS history_visited_at
+                 ON history(visited_at DESC);
+             CREATE INDEX IF NOT EXISTS history_url
+                 ON history(url);",
         )
         .map_err(|error| format!("create session schema: {error}"))?;
 
