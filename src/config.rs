@@ -1,3 +1,4 @@
+use crate::navigation;
 use std::env;
 use std::path::{Path, PathBuf};
 use url::Url;
@@ -193,27 +194,25 @@ fn validate_path(option: &str, path: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Accept only endpoints the navigation layer would also accept, so the CLI
+/// cannot accept a URL that later fails at search time. Plain `http` is
+/// refused unless the host is loopback, because queries would otherwise leave
+/// the machine in cleartext.
 fn validate_search_endpoint(endpoint: &str) -> Result<(), CliError> {
-    let url = Url::parse(endpoint)
+    let normalized = navigation::validate_explicit_url(endpoint).map_err(CliError::usage)?;
+    let url = Url::parse(&normalized)
         .map_err(|error| CliError::usage(format!("invalid search endpoint: {error}")))?;
-    if !matches!(url.scheme(), "http" | "https") || !valid_host(url.host_str()) {
+    let is_loopback = matches!(
+        url.host_str(),
+        Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+    ) || matches!(url.host(), Some(url::Host::Ipv4(address)) if address.is_loopback())
+        || matches!(url.host(), Some(url::Host::Ipv6(address)) if address.is_loopback());
+    if url.scheme() != "https" && !is_loopback {
         return Err(CliError::usage(
-            "search endpoint must be an http(s) URL with a valid host",
+            "search endpoint must use https (http is allowed only for a loopback host)",
         ));
     }
     Ok(())
-}
-
-fn valid_host(host: Option<&str>) -> bool {
-    let Some(host) = host else {
-        return false;
-    };
-    !host.is_empty()
-        && !host.chars().any(|character| {
-            character.is_whitespace()
-                || character.is_control()
-                || matches!(character, '/' | '\\' | '?' | '#' | '@')
-        })
 }
 
 #[cfg(unix)]

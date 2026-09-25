@@ -20,14 +20,16 @@
     },
     {
       "details": {
-        "errors": {
-          "about:settings": "smoke check failed: only about:blank is supported",
-          "data:text/html,x": "smoke check failed: only http, https, and about:blank are supported",
-          "file:///etc/passwd": "smoke check failed: only http, https, and about:blank are supported",
-          "javascript:alert(1)": "smoke check failed: only http, https, and about:blank are supported"
+        "expected_and_observed": {
+          "//evil.example": "only http, https, and about:blank are supported",
+          "HTTP://example.com/": "only http, https, and about:blank are supported",
+          "about:config": "only about:blank is supported",
+          "data:text/html,x": "only http, https, and about:blank are supported",
+          "file:///etc/passwd": "only http, https, and about:blank are supported",
+          "javascript:alert(1)": "only http, https, and about:blank are supported"
         }
       },
-      "name": "navigation_rejects_non_web_schemes",
+      "name": "navigation_rejects_non_web_and_lookalike_input",
       "passed": true
     },
     {
@@ -47,13 +49,37 @@
     },
     {
       "details": {
-        "database_modes": {
-          "session.sqlite": "0o600"
-        },
-        "profile": "temporary profile directory",
-        "profile_mode": "0o700"
+        "exit_codes": {
+          "file:///tmp/search": 2,
+          "http://127.0.0.1:8080/": 0,
+          "http://example.com/": 2,
+          "https://duckduckgo.com/": 0,
+          "https://ex_ample.com/": 2
+        }
       },
-      "name": "profile_and_database_are_user_private",
+      "name": "search_endpoint_policy",
+      "passed": true
+    },
+    {
+      "details": {
+        "database_mode_after": "0o600",
+        "directory_modes_after": {
+          "cache": "0o700",
+          "data": "0o700"
+        },
+        "modes_before": {
+          "cache": "0o777",
+          "data": "0o777",
+          "session.sqlite": "0o666",
+          "session.sqlite-shm": "0o666",
+          "session.sqlite-wal": "0o666"
+        },
+        "sidecars_after": {
+          "-shm": "absent (checkpointed into the database)",
+          "-wal": "absent (checkpointed into the database)"
+        }
+      },
+      "name": "profile_and_database_are_hardened_from_loose_modes",
       "passed": true
     },
     {

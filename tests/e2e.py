@@ -4,12 +4,13 @@
 Every check runs the real binary against loopback fixtures or explicit CLI
 input and asserts observable behaviour (exit code, JSON output, on-disk
 permissions). Nothing here claims GUI coverage: a WebKit window is exercised
-only when a display and WebDriver are available, which is reported separately.
+only by the manual procedure in the README.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import stat
 import sys
@@ -25,6 +26,7 @@ from harness import (
 
 
 REPORT = ROOT / "artifacts" / "e2e" / "report.json"
+SMOKE_PREFIX = "smoke check failed: "
 
 
 def record(checks: list[dict[str, object]], name: str, passed: bool, details: dict[str, object]) -> None:
@@ -33,6 +35,15 @@ def record(checks: list[dict[str, object]], name: str, passed: bool, details: di
 
 def mode_of(path: pathlib.Path) -> str:
     return oct(stat.S_IMODE(path.stat().st_mode))
+
+
+def force_mode(path: pathlib.Path, mode: int) -> None:
+    os.chmod(path, mode)
+
+
+def rejection_message(stderr: str) -> str:
+    """The stable part of a smoke failure, without the fixed prefix."""
+    return stderr.strip().removeprefix(SMOKE_PREFIX)
 
 
 def main() -> int:
@@ -68,17 +79,27 @@ def main() -> int:
             },
         )
 
-        rejected = {}
-        for candidate in ("file:///etc/passwd", "javascript:alert(1)", "about:settings", "data:text/html,x"):
+        # Security-relevant input, asserted against the exact message so a
+        # rejection cannot pass for an unrelated error.
+        lookalikes = {
+            "file:///etc/passwd": "only http, https, and about:blank are supported",
+            "javascript:alert(1)": "only http, https, and about:blank are supported",
+            "data:text/html,x": "only http, https, and about:blank are supported",
+            "HTTP://example.com/": "only http, https, and about:blank are supported",
+            "//evil.example": "only http, https, and about:blank are supported",
+            "about:config": "only about:blank is supported",
+        }
+        observed: dict[str, str] = {}
+        for candidate in lookalikes:
             result = run_browser(
                 "--smoke", "--profile-dir", str(profile), "--start-url", candidate, expect_code=1
             )
-            rejected[candidate] = result.stderr.strip()
+            observed[candidate] = rejection_message(result.stderr)
         record(
             checks,
-            "navigation_rejects_non_web_schemes",
-            all("only " in message for message in rejected.values()),
-            {"errors": rejected},
+            "navigation_rejects_non_web_and_lookalike_input",
+            observed == lookalikes,
+            {"expected_and_observed": observed},
         )
 
         bare_host = run_browser(
@@ -117,21 +138,88 @@ def main() -> int:
             },
         )
 
-        database_files = {
-            path.name: mode_of(path)
-            for path in sorted(profile.iterdir())
-            if path.is_file() and path.name.startswith("session.sqlite")
+        # A search endpoint carries queries off the machine, so plain http is
+        # refused except for a loopback host, and the same host rules as the
+        # navigation layer apply.
+        endpoints = {
+            "http://example.com/": 2,
+            "https://ex_ample.com/": 2,
+            "file:///tmp/search": 2,
+            "http://127.0.0.1:8080/": 0,
+            "https://duckduckgo.com/": 0,
+        }
+        endpoint_codes = {
+            endpoint: run_browser(
+                "--smoke",
+                "--profile-dir",
+                str(profile),
+                "--start-url",
+                "search:query",
+                "--search-endpoint",
+                endpoint,
+                expect_code=code,
+            ).returncode
+            for endpoint, code in endpoints.items()
         }
         record(
             checks,
-            "profile_and_database_are_user_private",
-            mode_of(profile) == "0o700"
-            and bool(database_files)
-            and all(mode == "0o600" for mode in database_files.values()),
+            "search_endpoint_policy",
+            endpoint_codes == endpoints,
+            {"exit_codes": endpoint_codes},
+        )
+
+        # Permission hardening has to be able to fail, so the profile is seeded
+        # world-readable first; a fresh mkdtemp is already 0700 and would make
+        # the check vacuous.
+        loose = pathlib.Path(tempfile_dir := profile / "loose")
+        loose.mkdir()
+        (loose / "data").mkdir()
+        (loose / "cache").mkdir()
+        (loose / "session.sqlite").touch()
+        (loose / "session.sqlite-wal").touch()
+        (loose / "session.sqlite-shm").touch()
+        for target in (
+            loose,
+            loose / "data",
+            loose / "cache",
+            loose / "session.sqlite",
+            loose / "session.sqlite-wal",
+            loose / "session.sqlite-shm",
+        ):
+            force_mode(target, 0o777 if target.is_dir() else 0o666)
+        before = {target.name: mode_of(target) for target in sorted(loose.iterdir())}
+        run_browser(
+            "--smoke", "--profile-dir", str(loose), "--start-url", "https://example.com/", expect_code=0
+        )
+        # SQLite checkpoints and removes the -wal/-shm sidecars on a clean
+        # close, so each must either be gone or be owner-only. Asserting only
+        # "absent" would make this branch vacuous, so both outcomes are named.
+        sidecars = {}
+        sidecars_ok = True
+        for suffix in ("-wal", "-shm"):
+            path = loose / f"session.sqlite{suffix}"
+            if path.exists():
+                sidecars[suffix] = mode_of(path)
+                sidecars_ok = sidecars_ok and mode_of(path) == "0o600"
+            else:
+                sidecars[suffix] = "absent (checkpointed into the database)"
+        directories = {name: mode_of(loose / name) for name in ("data", "cache")}
+        database_mode = mode_of(loose / "session.sqlite")
+        tightened = (
+            mode_of(loose) == "0o700"
+            and all(mode == "0o700" for mode in directories.values())
+            and database_mode == "0o600"
+            and sidecars_ok
+        )
+        record(
+            checks,
+            "profile_and_database_are_hardened_from_loose_modes",
+            tightened,
             {
-                "profile_mode": mode_of(profile),
-                "database_modes": database_files,
-                "profile": "temporary profile directory",
+                "modes_before": before,
+                "directory_modes_after": directories,
+                "database_mode_after": database_mode,
+                "sidecars_after": sidecars,
             },
         )
 

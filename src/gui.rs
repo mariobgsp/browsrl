@@ -60,12 +60,17 @@ pub fn run(config: Config) -> Result<(), String> {
         .flags(gtk::gio::ApplicationFlags::empty())
         .build();
     let activate_config = config.clone();
+    // A window that cannot be built is a startup failure, so the error is kept
+    // and returned after the main loop stops instead of exiting 0.
+    let startup_error: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let error_slot = startup_error.clone();
     application.connect_activate(move |application| {
         if !application.windows().is_empty() {
             return;
         }
         if let Err(error) = build_window(application, activate_config.clone()) {
             eprintln!("open R Browse window: {error}");
+            *error_slot.borrow_mut() = Some(error);
             application.quit();
         }
     });
@@ -75,7 +80,10 @@ pub fn run(config: Config) -> Result<(), String> {
         .next()
         .unwrap_or_else(|| "rbrowse".to_string());
     application.run_with_args(&[program]);
-    Ok(())
+    match startup_error.borrow_mut().take() {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 fn build_window(application: &adw::Application, config: Config) -> Result<(), String> {
@@ -131,12 +139,14 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
     let states: Rc<RefCell<Vec<PageRef>>> = Rc::new(RefCell::new(Vec::new()));
     let mut selected_page = None;
     for tab in restored {
+        let number = states.borrow().len() + 1;
         let (page, state) = create_page(
             &tab_view,
             &browser,
             tab.url,
             TabMode::Normal,
-            states.borrow().len() + 1,
+            number,
+            Some(tab.title),
         );
         states.borrow_mut().push(state);
         if tab.selected {
@@ -148,7 +158,7 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
             &config.start_url,
             config.search_endpoint.as_deref(),
         )?;
-        let (page, state) = create_page(&tab_view, &browser, url, TabMode::Normal, 1);
+        let (page, state) = create_page(&tab_view, &browser, url, TabMode::Normal, 1, None);
         states.borrow_mut().push(state);
         selected_page = Some(page);
     }
@@ -180,6 +190,7 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
             "about:blank".to_string(),
             TabMode::Normal,
             number,
+            None,
         );
         states_for_new.borrow_mut().push(state.clone());
         view_for_new.set_selected_page(&page);
@@ -197,6 +208,7 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
             "about:blank".to_string(),
             TabMode::Private,
             number,
+            None,
         );
         states_for_private.borrow_mut().push(state.clone());
         view_for_private.set_selected_page(&page);
@@ -217,15 +229,13 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         let Some(position) = position else {
             return Propagation::Proceed;
         };
-        let remaining = {
+        let last = {
             let states = states_for_close.borrow();
-            let remaining = states.len() - 1;
-            let last = (remaining == 0)
+            (states.len() == 1)
                 .then(|| states.get(position).cloned())
-                .flatten();
-            (remaining, last)
+                .flatten()
         };
-        if let Some(state) = remaining.1 {
+        if let Some(state) = last {
             // Never leave the window without a page: the last tab resets to
             // about:blank instead of closing.
             let _ = navigate_state(&state, "about:blank", endpoint_for_close.as_deref());
@@ -233,6 +243,8 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
             return Propagation::Stop;
         }
         states_for_close.borrow_mut().remove(position);
+        // Renumber so the strip stays dense ("Tab 1", "Tab 2") after a close.
+        renumber_tabs(&states_for_close);
         save_sessions(&states_for_close, &view_for_close, &store_for_close);
         Propagation::Proceed
     });
@@ -271,12 +283,30 @@ fn find_state(states: &Rc<RefCell<Vec<PageRef>>>, page: &adw::TabPage) -> Option
         .cloned()
 }
 
+/// Re-apply positional tab titles so the strip does not keep gaps after a
+/// close. A tab that already shows a page title keeps it.
+fn renumber_tabs(states: &Rc<RefCell<Vec<PageRef>>>) {
+    for (index, state) in states.borrow().iter().enumerate() {
+        let number = index + 1;
+        if state.title.borrow().as_str() == TabMode::title(state.mode, number + 1)
+            || state.title.borrow().as_str() == TabMode::title(state.mode, number)
+        {
+            let title = TabMode::title(state.mode, number);
+            *state.title.borrow_mut() = title.clone();
+            if let Some(page) = state.page.borrow().as_ref() {
+                page.set_title(&title);
+            }
+        }
+    }
+}
+
 fn create_page(
     tab_view: &adw::TabView,
     browser: &Browser,
     url: String,
     mode: TabMode,
     number: usize,
+    restored_title: Option<String>,
 ) -> (adw::TabPage, PageRef) {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.set_hexpand(true);
@@ -320,13 +350,18 @@ fn create_page(
     status.set_margin_bottom(4);
     content.append(&status);
 
+    // A restored tab keeps the title it had; a fresh tab gets its positional
+    // label until a page reports a real one.
+    let title = restored_title
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| mode.title(number));
     let state = Rc::new(PageState {
         content: content.clone(),
         placeholder: placeholder.clone(),
         address: address.clone(),
         status: status.clone(),
         url: RefCell::new(url.clone()),
-        title: RefCell::new(mode.title(number)),
+        title: RefCell::new(title.clone()),
         mode,
         page: RefCell::new(None),
         network: match mode {
@@ -343,7 +378,7 @@ fn create_page(
     connect_reload(&state, &reload);
 
     let page = tab_view.append(&content);
-    page.set_title(&mode.title(number));
+    page.set_title(&title);
     *state.page.borrow_mut() = Some(page.clone());
     (page, state)
 }

@@ -23,6 +23,11 @@ pub fn normalize_input_with_search(
     if value.starts_with("http://") || value.starts_with("https://") {
         return validate_explicit_url(value);
     }
+    if value.starts_with("//") {
+        // A protocol-relative reference is an attempt to navigate, not a query,
+        // so it is rejected as a URL rather than pushed towards search.
+        return Err("only http, https, and about:blank are supported".to_string());
+    }
     if let Some(query) = value.strip_prefix("search:") {
         let endpoint = search_endpoint.ok_or_else(|| {
             "search is disabled; configure an explicit --search-endpoint".to_string()

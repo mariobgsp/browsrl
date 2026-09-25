@@ -1,6 +1,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use url::Url;
 
 #[cfg(unix)]
@@ -23,19 +24,27 @@ pub struct SessionStore {
 
 impl SessionStore {
     pub fn open(path: &Path) -> Result<Self, String> {
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+        {
             fs::create_dir_all(parent)
                 .map_err(|error| format!("create profile directory: {error}"))?;
+            // Only directories this process created are hardened; an existing
+            // one may legitimately be shared with the user.
+            ensure_private_directory(parent)?;
         }
-        let mut connection =
-            Connection::open(path).map_err(|error| format!("open session database: {error}"))?;
+        create_private_file(path)?;
+        let mut connection = Connection::open(path)
+            .map_err(|error| describe_open_error(path, &error.to_string()))?;
+        connection
+            .busy_timeout(Duration::from_secs(5))
+            .map_err(|error| format!("configure session database: {error}"))?;
         connection
             .execute_batch(
                 "PRAGMA journal_mode = WAL;
-                 PRAGMA foreign_keys = ON;
-                 PRAGMA busy_timeout = 5000;",
+                 PRAGMA foreign_keys = ON;",
             )
-            .map_err(|error| format!("configure session database: {error}"))?;
+            .map_err(|error| describe_open_error(path, &error.to_string()))?;
         migrate_schema(&mut connection)?;
         protect_database_files(path)?;
         Ok(Self { connection })
@@ -209,6 +218,62 @@ fn is_allowed_url(value: &str) -> bool {
                 || character.is_control()
                 || matches!(character, '/' | '\\' | '?' | '#' | '@')
         })
+}
+
+/// Turn a low-level SQLite failure into something a person can act on. The
+/// common one is a second process writing the same profile, which R Browse
+/// does not support: the GUI is single-instance through GApplication.
+fn describe_open_error(path: &Path, message: &str) -> String {
+    if message.contains("locked") || message.contains("busy") {
+        return format!(
+            "session database {} is in use by another R Browse process; \
+             close it or use a different --profile-dir",
+            path.display()
+        );
+    }
+    format!("open session database {}: {message}", path.display())
+}
+
+/// Create the database file with owner-only permissions before SQLite opens
+/// it, so it is never briefly readable by other local users.
+#[cfg(unix)]
+fn create_private_file(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    if path.exists() {
+        return Ok(());
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)
+        .map(|_| ())
+        .map_err(|error| format!("create session database {}: {error}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn create_private_file(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        std::fs::File::create(path)
+            .map(|_| ())
+            .map_err(|error| format!("create session database {}: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_private_directory(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("protect directory {}: {error}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn ensure_private_directory(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 /// Keep the database and its write-ahead log readable only by the owner.

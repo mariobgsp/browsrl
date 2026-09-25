@@ -51,7 +51,9 @@ sessions, search endpoint) that every tab shares, so per-tab state stays in
 3. `LoadEvent::Finished` copies the final URI and title into the address entry
    and the tab label.
 4. Closing the window writes the normal tabs to SQLite in one transaction.
-   Private tabs are filtered out and are never restored.
+   Private tabs are filtered out and are never restored. The session is written
+   when a tab closes and when the window closes, so a `SIGKILL` or a crash loses
+   whatever changed since the last of those.
 
 ## Requirements and build
 
@@ -92,12 +94,17 @@ Usage: rbrowse [--profile-dir PATH] [--database-path PATH] [--data-dir PATH]
 | `--profile-dir` | Profile root; defaults to `$XDG_DATA_HOME/rbrowse`. |
 | `--database-path`, `--data-dir`, `--cache-dir` | Override individual paths inside the profile. |
 | `--start-url` | URL for the first tab; defaults to `about:blank`. |
-| `--search-endpoint` | Enables `search:` queries. Without it, search text is rejected instead of being sent anywhere. |
+| `--search-endpoint` | Enables `search:` queries. Without it, search text is rejected instead of being sent anywhere. Must be `https`, except for a loopback host such as a local SearxNG. |
 | `--no-restore` | Ignore stored tabs and start from `--start-url`. |
 | `--smoke` | Head-less contract path: validate the URL, write one session row, read it back, print JSON. |
 
 Exit codes: `0` for success and for `--help`/`--version`, `1` for a failed
 startup or smoke check, `2` for a malformed invocation.
+
+R Browse is single-instance: a second launch becomes a tab in the first window,
+so two processes never write the same profile. If a session database is held by
+another process anyway, startup fails with an explicit message rather than a
+bare SQLite error.
 
 ### Navigation policy
 
@@ -136,9 +143,15 @@ make verify     # fmt, clippy, head-less core check, build, e2e, diagram check
 
 `make e2e` runs the built binary against loopback fixtures from `tests/fixtures`
 and asserts observable behaviour: SQLite round-trip, session restore, rejection
-of non-web schemes, bare-host normalization, search requiring an explicit
-endpoint, `0700`/`0600` permissions, and the CLI exit-code contract. It needs
-no Internet access.
+of non-web and look-alike input (`file:`, `javascript:`, `data:`, `HTTP://`,
+`//host`, `about:config`) against their exact messages, bare-host normalization,
+search requiring an explicit endpoint, the `https`-only endpoint policy, the CLI
+exit-code contract, and permission hardening that starts from a deliberately
+world-readable profile. It needs no Internet access.
+
+The permission check is mutation-tested: with the hardening disabled it fails on
+`session.sqlite` remaining `0666` while every other check still passes, so it is
+not a check that passes by construction.
 
 ### Manual GUI verification
 
@@ -170,10 +183,17 @@ above.
 ## Privacy and current boundaries
 
 * WebKit owns page rendering, website data, cookies, and caching.
+* A private tab runs on `NetworkSession::new_ephemeral()`. In WebKitGTK 6.0 the
+  website-data manager belongs to the network session, so that session's
+  manager reports `is_ephemeral() == true` and has no data directory at all:
+  private cookies and site data stay in memory, are never written under
+  `data/`, and are not shared with the normal session. It is not a claim of
+  isolation from the operating system or the network itself.
+* The session database stores tab URLs and titles only. It is not a browsing
+  history, and it records nothing from a private tab.
 * There is no telemetry, account, sync, remote history, or update client in this
-  slice, and no code path that would add one.
-* Network egress goes through the WebKit network process; the shell itself opens
-  no sockets.
+  slice, and no code path that would add one. The shell opens no sockets of its
+  own: every request goes through the WebKit network process.
 * Wayland is preferred by the native GTK stack, with the GTK X11 fallback.
 
 Deliberately deferred: bookmarks, browsing history, downloads, reader mode,
