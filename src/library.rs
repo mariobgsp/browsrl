@@ -6,11 +6,11 @@
 //! opens it in the browsing window, so navigation still goes through the normal
 //! address policy.
 
+use browsrl::{bookmarks, history, storage};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
-use rbrowse::{bookmarks, history, storage};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -55,7 +55,7 @@ pub fn open(
     // of stacking copies, and quitting tears it down.
     let window = adw::Window::builder()
         .application(application)
-        .title(format!("R Browse — {}", kind.title()))
+        .title(format!("Browsrl — {}", kind.title()))
         .default_width(560)
         .default_height(520)
         .build();

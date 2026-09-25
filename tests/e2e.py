@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic, offline end-to-end contract for the first R Browse slice.
+"""Deterministic, offline end-to-end contract for the first Browsrl slice.
 
 Every check runs the real binary against loopback fixtures or explicit CLI
 input and asserts observable behaviour (exit code, JSON output, on-disk
@@ -281,8 +281,8 @@ def main() -> int:
     record(
         checks,
         "command_line_exit_codes",
-        help_result.stdout.startswith("Usage: rbrowse")
-        and version_result.stdout.strip() == "rbrowse 0.1.0"
+        help_result.stdout.startswith("Usage: browsrl")
+        and version_result.stdout.strip() == "browsrl 0.1.0"
         and unknown_result.stderr.startswith("unknown argument")
         and missing_value.stderr.strip() == "--profile-dir needs a path",
         {
@@ -303,7 +303,7 @@ def main() -> int:
     home = pathlib.Path.home()
     guard_cases = {
         "own_test_profile": [str(BINARY), "--profile-dir", str(temp / f"{PROFILE_PREFIX}abc")],
-        "personal_data_dir": [str(BINARY), "--profile-dir", str(home / ".local/share/rbrowse")],
+        "personal_data_dir": [str(BINARY), "--profile-dir", str(home / ".local/share/browsrl")],
         "prefix_nested_deeper": [
             str(BINARY),
             "--profile-dir",

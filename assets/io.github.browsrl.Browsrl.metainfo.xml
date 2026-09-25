@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.rbrowse.RBrowse</id>
+  <id>io.github.browsrl.Browsrl</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
 
-  <name>R Browse</name>
+  <name>Browsrl</name>
   <summary>A small local-first browser shell for GTK desktops</summary>
 
   <description>
     <p>
-      R Browse is a GTK4 and WebKitGTK 6.0 browser shell built around a strict
+      Browsrl is a GTK4 and WebKitGTK 6.0 browser shell built around a strict
       navigation boundary and a single local profile directory.
     </p>
     <ul>
@@ -21,10 +21,10 @@
     </ul>
   </description>
 
-  <launchable type="desktop-id">io.github.rbrowse.RBrowse.desktop</launchable>
+  <launchable type="desktop-id">io.github.browsrl.Browsrl.desktop</launchable>
 
   <provides>
-    <binary>rbrowse</binary>
+    <binary>browsrl</binary>
   </provides>
 
   <categories>

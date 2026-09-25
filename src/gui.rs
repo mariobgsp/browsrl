@@ -1,13 +1,13 @@
 //! GTK4/libadwaita/WebKitGTK shell: window, tab strip, and lazy page realization.
 
 use crate::library::{self, LibraryKind};
+use browsrl::{config::Config, downloads, navigation, readability, storage};
 use gtk4 as gtk;
 use gtk4::glib;
 use gtk4::glib::Propagation;
 use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
-use rbrowse::{config::Config, downloads, navigation, readability, storage};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
@@ -68,7 +68,7 @@ fn watch_one_download(download: &Download, download_dir: &std::path::Path) {
     });
 }
 
-pub const APPLICATION_ID: &str = "io.github.rbrowse.RBrowse";
+pub const APPLICATION_ID: &str = "io.github.browsrl.Browsrl";
 
 type PageRef = Rc<PageState>;
 type NetworkHandle = Rc<NetworkSession>;
@@ -598,16 +598,16 @@ pub fn run(config: Config) -> Result<(), String> {
             return;
         }
         if let Err(error) = build_window(application, activate_config.clone()) {
-            eprintln!("open R Browse window: {error}");
+            eprintln!("open Browsrl window: {error}");
             *error_slot.borrow_mut() = Some(error);
             application.quit();
         }
     });
-    // R Browse parses its own flags, so the GTK option parser only ever sees
+    // Browsrl parses its own flags, so the GTK option parser only ever sees
     // the program name; unknown-flag handling and exit codes stay ours.
     let program = std::env::args()
         .next()
-        .unwrap_or_else(|| "rbrowse".to_string());
+        .unwrap_or_else(|| "browsrl".to_string());
     application.run_with_args(&[program]);
     match startup_error.borrow_mut().take() {
         Some(error) => Err(error),
@@ -646,7 +646,7 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
 
     let window = adw::ApplicationWindow::builder()
         .application(application)
-        .title("R Browse")
+        .title("Browsrl")
         .default_width(1100)
         .default_height(760)
         .content(&root)
@@ -881,7 +881,7 @@ fn install_actions(application: &adw::Application, shell: &Shell) {
 /// It lives outside the profile, so a private download is never persisted with
 /// the browser's data, and it is removed when the window closes.
 fn private_download_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("rbrowse-private-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("browsrl-private-{}", std::process::id()));
     // Best effort: if it cannot be created the download handler will refuse the
     // write rather than fall back to somewhere less private.
     let _ = std::fs::create_dir_all(&dir);

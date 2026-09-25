@@ -74,7 +74,7 @@ impl Config {
             return Err(CliError::usage("XDG_DATA_HOME must be an absolute path"));
         }
 
-        let default_profile = data_home.join("rbrowse");
+        let default_profile = data_home.join("browsrl");
         let mut profile_dir = None;
         let mut database_path = None;
         let mut data_dir = None;
@@ -138,7 +138,7 @@ impl Config {
                 "-h" | "--help" => return Err(CliError::success(usage())),
                 "-V" | "--version" => {
                     return Err(CliError::success(format!(
-                        "rbrowse {}",
+                        "browsrl {}",
                         env!("CARGO_PKG_VERSION")
                     )));
                 }
@@ -254,7 +254,7 @@ fn ensure_private_directory(path: &Path) -> Result<(), String> {
 
 pub fn usage() -> String {
     concat!(
-        "Usage: rbrowse [--profile-dir PATH] [--database-path PATH] [--data-dir PATH] ",
+        "Usage: browsrl [--profile-dir PATH] [--database-path PATH] [--data-dir PATH] ",
         "[--cache-dir PATH] [--download-dir PATH] [--start-url URL] ",
         "[--search-endpoint URL] [--no-restore] ",
         "[--smoke] [--storage-check]"

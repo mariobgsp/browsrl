@@ -15,6 +15,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
+name = "browsrl"
+version = "0.1.0"
+dependencies = [
+ "gtk4",
+ "libadwaita",
+ "rusqlite",
+ "serde_json",
+ "url",
+ "webkit6",
+]
+
+[[package]]
 name = "cairo-rs"
 version = "0.22.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -740,18 +752,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
-]
-
-[[package]]
-name = "rbrowse"
-version = "0.1.0"
-dependencies = [
- "gtk4",
- "libadwaita",
- "rusqlite",
- "serde_json",
- "url",
- "webkit6",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
-# R Browse
+# Browsrl
 
-R Browse is an independent, local-first Linux browser shell written in Rust on
+Browsrl is an independent, local-first Linux browser shell written in Rust on
 top of GTK4, libadwaita, and WebKitGTK 6.0. It is an independent
 implementation in the spirit of the macOS browser
 [driceroland/Search](https://github.com/driceroland/Search); no upstream code is
@@ -36,11 +36,11 @@ missing is listed as deferred below rather than stubbed out.
 
 ## Architecture
 
-![R Browse module architecture](diagrams/architecture.svg)
+![Browsrl module architecture](diagrams/architecture.svg)
 
-![R Browse tab lifecycle](diagrams/tab-lifecycle.svg)
+![Browsrl tab lifecycle](diagrams/tab-lifecycle.svg)
 
-![R Browse profile and privacy boundary](diagrams/profile-and-privacy.svg)
+![Browsrl profile and privacy boundary](diagrams/profile-and-privacy.svg)
 
 PNG fallbacks are committed next to the SVGs: [architecture](diagrams/architecture.png),
 [tab lifecycle](diagrams/tab-lifecycle.png), and
@@ -113,14 +113,14 @@ disabled and there is no flag that turns it off.
 ## Command line
 
 ```
-Usage: rbrowse [--profile-dir PATH] [--database-path PATH] [--data-dir PATH]
+Usage: browsrl [--profile-dir PATH] [--database-path PATH] [--data-dir PATH]
                [--cache-dir PATH] [--start-url URL] [--search-endpoint URL]
                [--no-restore] [--smoke]
 ```
 
 | Flag | Meaning |
 | --- | --- |
-| `--profile-dir` | Profile root; defaults to `$XDG_DATA_HOME/rbrowse`. |
+| `--profile-dir` | Profile root; defaults to `$XDG_DATA_HOME/browsrl`. |
 | `--database-path`, `--data-dir`, `--cache-dir` | Override individual paths inside the profile. |
 | `--start-url` | URL for the first tab; defaults to `about:blank`. |
 | `--search-endpoint` | Enables `search:` queries. Without it, search text is rejected instead of being sent anywhere. Must be `https`, except for a loopback host such as a local SearxNG. |
@@ -132,7 +132,7 @@ Usage: rbrowse [--profile-dir PATH] [--database-path PATH] [--data-dir PATH]
 Exit codes: `0` for success and for `--help`/`--version`, `1` for a failed
 startup or smoke check, `2` for a malformed invocation.
 
-R Browse is single-instance: a second launch becomes a tab in the first window,
+Browsrl is single-instance: a second launch becomes a tab in the first window,
 so two processes never write the same profile. If a session database is held by
 another process anyway, startup fails with an explicit message rather than a
 bare SQLite error.
@@ -203,7 +203,7 @@ not by the automated contract. Serve a fixture and start the browser:
 ```sh
 make build
 (cd tests/fixtures && python3 -m http.server 8123 --bind 127.0.0.1 &)
-./target/debug/rbrowse --profile-dir "$(mktemp -d)" \
+./target/debug/browsrl --profile-dir "$(mktemp -d)" \
     --start-url http://127.0.0.1:8123/one.html
 ```
 
@@ -309,14 +309,14 @@ functional superset of the macOS browser it is inspired by.
 
 ## Distributing
 
-`make dist` builds `dist/rbrowse-<version>.tar.gz` after the gate, the packaging
+`make dist` builds `dist/browsrl-<version>.tar.gz` after the gate, the packaging
 checks and the diagram freshness check have all passed, so an archive can never
 carry a stale diagram or an unvalidated desktop entry. It is a source tarball
 with no `.git`, and it builds on its own:
 
 ```sh
 make dist
-tar xzf dist/rbrowse-0.1.0.tar.gz -C /tmp && cd /tmp/rbrowse-0.1.0 && cargo build
+tar xzf dist/browsrl-0.1.0.tar.gz -C /tmp && cd /tmp/browsrl-0.1.0 && cargo build
 ```
 
 ## Installing
@@ -331,7 +331,7 @@ make install DESTDIR=/tmp/stage       # staging only, touches nothing
 make uninstall PREFIX=$HOME/.local
 ```
 
-The desktop entry registers the `http` and `https` handlers, so R Browse can
+The desktop entry registers the `http` and `https` handlers, so Browsrl can
 open links handed to it by other applications. `make packaging` validates the
 entry with `desktop-file-validate` and the metadata with `appstreamcli`; the one
 accepted AppStream warning is the missing project homepage, because this

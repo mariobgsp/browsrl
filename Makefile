@@ -20,7 +20,7 @@ PREFIX ?= /usr
 DESTDIR ?=
 BINDIR := $(DESTDIR)$(PREFIX)/bin
 DATADIR := $(DESTDIR)$(PREFIX)/share
-APP_ID := io.github.rbrowse.RBrowse
+APP_ID := io.github.browsrl.Browsrl
 ASSETS := assets
 
 # The machine-checkable subset: everything that needs no renderer and no
@@ -84,7 +84,7 @@ diagrams-check:
 check-desktop:
 	@desktop-file-validate $(ASSETS)/$(APP_ID).desktop && echo "desktop entry: valid"
 	@python3 -c "import xml.etree.ElementTree as E; E.parse('$(ASSETS)/$(APP_ID).metainfo.xml'); print('metainfo xml: well formed')"
-	@python3 -c "d=open('$(ASSETS)/rbrowse-128.png','rb').read(); \
+	@python3 -c "d=open('$(ASSETS)/browsrl-128.png','rb').read(); \
 		assert d[:8]==b'\\x89PNG\\r\\n\\x1a\\n', 'not a png'; print('icon: valid png')"
 	@# appstreamcli reports the missing project homepage as a warning. This
 	@# repository has no public URL yet, so that warning is accepted and only a
@@ -106,7 +106,7 @@ verify: $(GATE) packaging diagrams-check
 # A source archive, for handing the project to a machine without git. Built
 # from the same inputs the gate checks, and it refuses to include a stale
 # diagram or an unverified desktop entry by depending on the same targets.
-DIST_NAME := rbrowse-$(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+DIST_NAME := browsrl-$(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 DIST_DIR := dist/$(DIST_NAME)
 
 dist: verify build-release
@@ -120,19 +120,19 @@ dist: verify build-release
 	@printf 'built %s\n' "dist/$(DIST_NAME).tar.gz"
 
 install: build-release
-	install -Dm755 target/release/rbrowse $(BINDIR)/rbrowse
+	install -Dm755 target/release/browsrl $(BINDIR)/browsrl
 	install -Dm644 $(ASSETS)/$(APP_ID).desktop \
 		$(DATADIR)/applications/$(APP_ID).desktop
 	install -Dm644 $(ASSETS)/$(APP_ID).metainfo.xml \
 		$(DATADIR)/metainfo/$(APP_ID).metainfo.xml
-	install -Dm644 $(ASSETS)/rbrowse-128.png \
-		$(DATADIR)/icons/hicolor/128x128/apps/rbrowse.png
+	install -Dm644 $(ASSETS)/browsrl-128.png \
+		$(DATADIR)/icons/hicolor/128x128/apps/browsrl.png
 	@echo "installed to $(DESTDIR)$(PREFIX)"
 
 uninstall:
-	rm -f $(BINDIR)/rbrowse
+	rm -f $(BINDIR)/browsrl
 	rm -f $(DATADIR)/applications/$(APP_ID).desktop
 	rm -f $(DATADIR)/metainfo/$(APP_ID).metainfo.xml
-	rm -f $(DATADIR)/icons/hicolor/128x128/apps/rbrowse.png
+	rm -f $(DATADIR)/icons/hicolor/128x128/apps/browsrl.png
 	@rmdir $(DATADIR)/icons/hicolor/128x128/apps $(DATADIR)/icons/hicolor/128x128 2>/dev/null || true
 	@echo "removed from $(DESTDIR)$(PREFIX)"

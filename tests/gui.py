@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GUI contract for R Browse, driven through the window it really opens.
+"""GUI contract for Browsrl, driven through the window it really opens.
 
 WebKitGTK 6.0 cannot be driven by WebKitWebDriver, because a session needs the
 app to answer ``WebKitAutomationSession::create-web-view`` and the ``webkit6``
@@ -39,13 +39,13 @@ from harness import (
 
 
 REPORT = ROOT / "artifacts" / "e2e-gui" / "report.json"
-APPLICATION_ID = "io.github.rbrowse.RBrowse"
-OBJECT_PATH = "/io/github/rbrowse/RBrowse"
+APPLICATION_ID = "io.github.browsrl.Browsrl"
+OBJECT_PATH = "/io/github/browsrl/Browsrl"
 READY_SECONDS = 30
 
 # Names this harness's own log files, so they can be recognised and removed
 # without touching anything else in the temporary directory.
-LOG_PREFIX = "rbrowse-gui-"
+LOG_PREFIX = "browsrl-gui-"
 
 
 def have_wtype() -> bool:

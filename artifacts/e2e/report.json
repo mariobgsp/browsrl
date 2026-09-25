@@ -1,5 +1,5 @@
 {
-  "binary": "target/debug/rbrowse",
+  "binary": "target/debug/browsrl",
   "checks": [
     {
       "details": {
@@ -197,7 +197,7 @@
           "temp_dir_itself": false,
           "traversal_out_of_temp": false
         },
-        "profile_prefix": "rbrowse-e2e-",
+        "profile_prefix": "browsrl-e2e-",
         "verdicts": {
           "another_browser": false,
           "flag_without_value": false,

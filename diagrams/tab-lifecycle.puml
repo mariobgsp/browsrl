@@ -1,6 +1,6 @@
 @startuml
 !pragma layout smetana
-title R Browse tab lifecycle (lazy WebView realization)
+title Browsrl tab lifecycle (lazy WebView realization)
 
 [*] --> Start : application activate
 Start --> Restoring : restore_session and stored rows exist

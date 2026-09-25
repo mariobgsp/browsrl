@@ -1,7 +1,7 @@
-//! R Browse entry point: argument handling, the offline smoke path, and the
+//! Browsrl entry point: argument handling, the offline smoke path, and the
 //! native shell hand-off.
 
-use rbrowse::{config::Config, downloads, navigation, storage};
+use browsrl::{config::Config, downloads, navigation, storage};
 use serde_json::json;
 
 #[cfg(feature = "webkit")]
@@ -40,14 +40,14 @@ fn main() {
 
     #[cfg(feature = "webkit")]
     if let Err(error) = gui::run(config) {
-        eprintln!("R Browse: {error}");
+        eprintln!("Browsrl: {error}");
         std::process::exit(1);
     }
 
     #[cfg(not(feature = "webkit"))]
     {
         let _ = &config;
-        eprintln!("R Browse was built without WebKit; use --smoke or --storage-check");
+        eprintln!("Browsrl was built without WebKit; use --smoke or --storage-check");
     }
 }
 

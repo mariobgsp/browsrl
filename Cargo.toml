@@ -1,11 +1,11 @@
 [package]
-name = "rbrowse"
+name = "browsrl"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
 description = "A small local-first GTK4 and WebKitGTK Linux browser"
 license = "MIT OR Apache-2.0"
-default-run = "rbrowse"
+default-run = "browsrl"
 
 [features]
 default = ["webkit"]

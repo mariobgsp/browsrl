@@ -16,7 +16,7 @@ from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
-BINARY = ROOT / "target" / "debug" / "rbrowse"
+BINARY = ROOT / "target" / "debug" / "browsrl"
 TIMEOUT_SECONDS = 180
 
 
@@ -155,7 +155,7 @@ def read_database(path: pathlib.Path) -> dict[str, Any]:
 # Every profile this harness makes is a fresh directory directly under the
 # system temporary directory with this prefix. Cleanup keys off the same
 # constant, so a guard can never drift away from whatever created the profile.
-PROFILE_PREFIX = "rbrowse-e2e-"
+PROFILE_PREFIX = "browsrl-e2e-"
 
 
 def temporary_profile() -> tempfile.TemporaryDirectory[str]:
