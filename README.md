@@ -128,7 +128,8 @@ desktop, or OpenCode configuration is touched.
 ## Verification
 
 ```sh
-make verify     # fmt, clippy, head-less core check, build, e2e, diagram check
+make gate     # the machine-checkable subset, no renderer or display needed
+make verify   # gate plus the diagram freshness check
 ```
 
 | Target | What it proves |
@@ -140,6 +141,14 @@ make verify     # fmt, clippy, head-less core check, build, e2e, diagram check
 | `make e2e` | The offline contract below, writing `artifacts/e2e/report.json`. |
 | `make perf` | Five smoke runs, writing `artifacts/perf.json`. |
 | `make diagrams-check` | Every committed SVG/PNG matches a fresh render. |
+| `make gate` | All of the above except the diagram check, plus a printed check count. |
+| `make verify` | `gate` and `diagrams-check`. |
+
+`.pi/verify.json` wires `make gate` into the project verification gate, so a
+session in this repository has to produce a passing report before its work
+counts as complete. The `api`, `ui`, and `visual` dimensions are waived there
+with written reasons, because this is a GTK desktop application with no HTTP
+surface and no route-based visual expectations.
 
 `make e2e` runs the built binary against loopback fixtures from `tests/fixtures`
 and asserts observable behaviour: SQLite round-trip, session restore, rejection

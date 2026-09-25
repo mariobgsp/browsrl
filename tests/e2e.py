@@ -256,6 +256,13 @@ def main() -> int:
     }
     REPORT.parent.mkdir(parents=True, exist_ok=True)
     REPORT.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # A one-line summary keeps the output readable for a person and gives an
+    # automated test-count parser something to count.
+    if passed:
+        print(f"e2e: {len(checks)} passed")
+    else:
+        failed = sum(1 for check in checks if not check["passed"])
+        print(f"e2e: {len(checks) - failed} passed, {failed} failed")
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if passed else 1
 

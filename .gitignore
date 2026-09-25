@@ -1,7 +1,8 @@
 /target/
 diagrams/rendered/
 __pycache__/
-.pi/
+.pi/*
+!.pi/verify.json
 artifacts/perf.json
 *.swp
 .DS_Store
