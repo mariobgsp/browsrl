@@ -7,4 +7,6 @@ pub mod config;
 pub mod downloads;
 pub mod history;
 pub mod navigation;
+#[cfg(feature = "webkit")]
+pub mod readability;
 pub mod storage;

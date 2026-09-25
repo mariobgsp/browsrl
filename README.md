@@ -21,8 +21,9 @@ missing is listed as deferred below rather than stubbed out.
 | Bookmarks | Star toggle in the toolbar or `Ctrl+D`, deduplicated by URL, `file:` and other schemes refused |
 | History | Written when WebKit reports a finished load, repeat visits collapsed, pruned to 5000 rows |
 | Downloads | Saved into `profile/downloads`, server-supplied names reduced to a safe leaf, collisions numbered |
+| Readability | Per-tab pass that constrains measure, enlarges type and hides page chrome, applied as a user style sheet with no script injected |
 | Session | Tabs restored on launch, saved on tab close and window close |
-| Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+C` |
+| Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+Shift+R` `Ctrl+C` |
 | Profile | One local directory, `0700`/`0600`, SQLite schema with in-place migration |
 
 ## Architecture
@@ -50,6 +51,7 @@ PNG fallbacks are committed next to the SVGs: [architecture](diagrams/architectu
 | `src/bookmarks.rs` | Bookmark store: add, remove, list, deduplicated by URL. |
 | `src/history.rs` | History store: finished-load records, collapsed repeats, capped at 5000 rows. |
 | `src/downloads.rs` | Download destination policy: server-supplied names reduced to a safe leaf inside the profile. |
+| `src/readability.rs` | The per-tab readability style sheet. Not the engine's reader, which WebKitGTK 6.0 no longer exposes. |
 | `src/main.rs` | Process entry: arguments, the `--smoke` path, exit codes. |
 | `src/gui.rs` | `AdwApplication`, window, tab strip, `PageState`, the window's `WebContext`, and lazy `WebView` realization. |
 
@@ -226,7 +228,7 @@ above.
   own: every request goes through the WebKit network process.
 * Wayland is preferred by the native GTK stack, with the GTK X11 fallback.
 
-Deliberately deferred: reader mode, passwords (Secret Service is not
+Deliberately deferred: passwords (Secret Service is not
 wired yet), extensions, DRM playback, packaging, desktop integration, and update
 management. A visible list of bookmarks and history is also still missing: both
 stores work and are asserted by the contract, but there is no window for them

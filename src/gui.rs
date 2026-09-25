@@ -4,8 +4,8 @@ use gtk4 as gtk;
 use gtk4::glib::Propagation;
 use gtk4::prelude::*;
 use libadwaita as adw;
-use rbrowse::{config::Config, downloads, navigation, storage};
-use std::cell::RefCell;
+use rbrowse::{config::Config, downloads, navigation, readability, storage};
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use webkit6::prelude::*;
@@ -106,6 +106,13 @@ struct PageState {
     view: RefCell<Option<WebView>>,
     /// Toolbar button that reflects and toggles the bookmark state.
     bookmark: gtk::Button,
+    /// Toolbar button that reflects and toggles the readability pass.
+    readable: gtk::Button,
+    /// Whether this tab is showing the readability stylesheet.
+    readable_on: Cell<bool>,
+    /// Per-tab content manager; the sheet is added to and removed from it.
+    readable_manager: webkit6::UserContentManager,
+    readable_sheet: RefCell<Option<webkit6::UserStyleSheet>>,
     /// Profile store, shared with the window so a finished load can be recorded
     /// without reaching back into the tab list.
     store: Rc<RefCell<storage::SessionStore>>,
@@ -223,6 +230,12 @@ impl Shell {
         }
     }
 
+    fn toggle_readability(&self) {
+        if let Some(state) = self.selected() {
+            toggle_readability(&state);
+        }
+    }
+
     fn copy_address(&self) {
         let Some(state) = self.selected() else {
             return;
@@ -268,6 +281,68 @@ fn toggle_bookmark(state: &PageRef, store: &Rc<RefCell<storage::SessionStore>>) 
         }
         Err(error) => state.status.set_text(&format!("bookmark failed: {error}")),
     }
+}
+
+/// Apply or remove the readability pass for a tab.
+///
+/// The stylesheet is attached to a per-tab content manager, so no script runs
+/// in the page and no other tab is affected.
+fn toggle_readability(state: &PageRef) {
+    let next = !state.readable_on.get();
+    state.readable_on.set(next);
+    set_readability_icon(state, next);
+    apply_readability_sheet(state);
+    state.status.set_text(if next {
+        "Readability pass on"
+    } else {
+        "Readability pass off"
+    });
+}
+
+/// Reconcile the tab's manager with the readability flag.
+///
+/// Idempotent, so it is safe to call both from the toggle and when a view is
+/// realized: the sheet is attached exactly once and removed exactly once.
+fn apply_readability_sheet(state: &PageRef) {
+    let wanted = state.readable_on.get();
+    let attached = state.readable_sheet.borrow().is_some();
+    match (wanted, attached) {
+        (true, false) => {
+            let sheet = readability::sheet();
+            state.readable_manager.add_style_sheet(&sheet);
+            *state.readable_sheet.borrow_mut() = Some(sheet);
+        }
+        (false, true) => {
+            if let Some(sheet) = state.readable_sheet.borrow_mut().take() {
+                state.readable_manager.remove_style_sheet(&sheet);
+            }
+        }
+        // Already in the requested state.
+        (true, true) | (false, false) => {}
+    }
+}
+
+fn set_readability_icon(state: &PageRef, on: bool) {
+    state.readable.set_icon_name(if on {
+        "view-reading-mode-checked-symbolic"
+    } else {
+        "view-reading-mode-symbolic"
+    });
+    state.readable.set_tooltip_text(Some(if on {
+        "Turn off the readability pass (Ctrl+Shift+R)"
+    } else {
+        "Apply the readability pass (Ctrl+Shift+R)"
+    }));
+}
+
+fn connect_readability_button(state: &PageRef, button: &gtk::Button) {
+    let weak: Weak<PageState> = Rc::downgrade(state);
+    button.connect_clicked(move |_| {
+        let Some(state) = weak.upgrade() else {
+            return;
+        };
+        toggle_readability(&state);
+    });
 }
 
 fn set_bookmark_icon(state: &PageRef, bookmarked: bool) {
@@ -501,6 +576,11 @@ fn install_actions(application: &adw::Application, shell: &Shell) {
         ),
         ("reload", &["<Primary>r", "F5"], Shell::reload_selected),
         ("bookmark", &["<Primary>d"], Shell::toggle_bookmark),
+        (
+            "readability",
+            &["<Primary><Shift>r"],
+            Shell::toggle_readability,
+        ),
         ("focus-address", &["<Primary>l"], Shell::focus_address),
         ("copy-page-address", &["<Primary>c"], Shell::copy_address),
     ];
@@ -577,6 +657,7 @@ fn create_page(
     let reload = gtk::Button::with_label("Reload");
     reload.set_tooltip_text(Some("Reload"));
     let bookmark = gtk::Button::from_icon_name("non-starred-symbolic");
+    let readable = gtk::Button::from_icon_name("view-reading-mode-symbolic");
     let address = gtk::Entry::new();
     address.set_text(&url);
     address.set_placeholder_text(Some("Address (use search: for a configured search)"));
@@ -587,6 +668,7 @@ fn create_page(
     }
     toolbar.append(&address);
     toolbar.append(&bookmark);
+    toolbar.append(&readable);
     content.append(&toolbar);
 
     let placeholder = gtk::Label::new(Some("WebView is created when this tab is selected"));
@@ -626,6 +708,10 @@ fn create_page(
         context: browser.context.clone(),
         view: RefCell::new(None),
         bookmark: bookmark.clone(),
+        readable: readable.clone(),
+        readable_on: Cell::new(false),
+        readable_manager: readability::manager(),
+        readable_sheet: RefCell::new(None),
         store: browser.store.clone(),
     });
 
@@ -634,7 +720,9 @@ fn create_page(
     connect_history_button(&state, &forward, HistoryAction::Forward);
     connect_reload(&state, &reload);
     connect_bookmark_button(&state, &browser.store, &bookmark);
+    connect_readability_button(&state, &readable);
     set_bookmark_icon(&state, false);
+    set_readability_icon(&state, false);
 
     let page = tab_view.append(&content);
     page.set_title(&title);
@@ -730,10 +818,16 @@ fn realize_page(state: &PageRef) {
         return;
     }
     let url = state.url.borrow().clone();
+    // The content manager is construct-only, so every view is built with this
+    // tab's own manager; readability only adds or removes a sheet on it.
     let view = WebView::builder()
         .web_context(state.context.as_ref())
         .network_session(state.network.as_ref())
+        .user_content_manager(&state.readable_manager)
         .build();
+    // A tab can be switched to readability before it is ever selected, so the
+    // flag is honoured here rather than only in the toggle.
+    apply_readability_sheet(state);
     let weak: Weak<PageState> = Rc::downgrade(state);
     let store = state.store.clone();
     view.connect_load_changed(move |view, event| {
