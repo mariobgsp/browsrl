@@ -117,14 +117,20 @@ def main() -> int:
             },
         )
 
-        database = profile / "session.sqlite"
+        database_files = {
+            path.name: mode_of(path)
+            for path in sorted(profile.iterdir())
+            if path.is_file() and path.name.startswith("session.sqlite")
+        }
         record(
             checks,
             "profile_and_database_are_user_private",
-            mode_of(profile) == "0o700" and mode_of(database) == "0o600",
+            mode_of(profile) == "0o700"
+            and bool(database_files)
+            and all(mode == "0o600" for mode in database_files.values()),
             {
                 "profile_mode": mode_of(profile),
-                "database_mode": mode_of(database),
+                "database_modes": database_files,
                 "profile": "temporary profile directory",
             },
         )
@@ -155,8 +161,9 @@ def main() -> int:
         "checks": checks,
         "network": "loopback fixtures only",
         "not_covered": [
-            "GTK window rendering and WebKit page load need a display plus WebKitWebDriver",
-            "no Xvfb or WebKitWebDriver is installed on this host",
+            "the GTK window and WebKit page load are checked by hand (see README), not by this contract",
+            "WebDriver automation of this app is blocked: WebKitGTK 6.0 requires the app to answer"
+            " WebKitAutomationSession::create-web-view, which webkit6 0.6.1 does not expose",
         ],
     }
     REPORT.parent.mkdir(parents=True, exist_ok=True)

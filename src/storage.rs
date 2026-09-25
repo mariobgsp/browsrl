@@ -1,6 +1,6 @@
 use rusqlite::{Connection, OptionalExtension, params};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use url::Url;
 
 #[cfg(unix)]
@@ -37,7 +37,7 @@ impl SessionStore {
             )
             .map_err(|error| format!("configure session database: {error}"))?;
         migrate_schema(&mut connection)?;
-        protect_database(path)?;
+        protect_database_files(path)?;
         Ok(Self { connection })
     }
 
@@ -211,13 +211,34 @@ fn is_allowed_url(value: &str) -> bool {
         })
 }
 
+/// Keep the database and its write-ahead log readable only by the owner.
+///
+/// The `-wal` and `-shm` sidecars hold the same URLs and titles as the
+/// database, and SQLite creates them with the process umask rather than with
+/// the database file's mode, so they are hardened explicitly.
 #[cfg(unix)]
-fn protect_database(path: &Path) -> Result<(), String> {
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .map_err(|error| format!("protect session database: {error}"))
+fn protect_database_files(path: &Path) -> Result<(), String> {
+    for name in [
+        path.to_path_buf(),
+        sidecar(path, "-wal"),
+        sidecar(path, "-shm"),
+    ] {
+        if !name.exists() {
+            continue;
+        }
+        fs::set_permissions(&name, fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("protect session database {}: {error}", name.display()))?;
+    }
+    Ok(())
+}
+
+fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
 }
 
 #[cfg(not(unix))]
-fn protect_database(_path: &Path) -> Result<(), String> {
+fn protect_database_files(_path: &Path) -> Result<(), String> {
     Ok(())
 }

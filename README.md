@@ -32,13 +32,15 @@ PNG fallbacks are committed next to the SVGs: [architecture](diagrams/architectu
 | `src/lib.rs` | Library root; no GUI dependencies. |
 | `src/config.rs` | CLI parsing, exit codes, profile paths, `0700` directory hardening. |
 | `src/navigation.rs` | The navigation policy: `http`, `https`, `about:blank`, and opt-in search. |
-| `src/storage.rs` | Versioned SQLite `session_tabs` schema, migration, transactional save. |
+| `src/storage.rs` | Versioned SQLite `session_tabs` schema, migration, transactional save, `0600` hardening of the database and its `-wal`/`-shm` sidecars. |
 | `src/main.rs` | Process entry: arguments, the `--smoke` path, exit codes. |
-| `src/gui.rs` | `AdwApplication`, window, tab strip, `PageState`, lazy `WebView` realization. |
+| `src/gui.rs` | `AdwApplication`, window, tab strip, `PageState`, the window's `WebContext`, and lazy `WebView` realization. |
 
 The library half is deliberately free of GTK and WebKit so it can be checked
 head-less (`make check-core`) and exercised by the end-to-end contract without a
-display.
+display. `gui.rs` holds a `Browser` bundle (context, normal and private network
+sessions, search endpoint) that every tab shares, so per-tab state stays in
+`PageState`.
 
 ### How a tab works
 
@@ -110,7 +112,9 @@ the shell can never become an accidental search relay to a third party.
 
 The profile holds `session.sqlite` (`0600`) plus `data/` and `cache/`
 directories (`0700`), and every one of them is created or re-hardened at
-startup. Cookies and site data stay inside WebKit's own storage under
+startup. SQLite's `-wal` and `-shm` sidecars carry the same URLs and titles as
+the database and are created with the process umask, so they are re-hardened to
+`0600` as well. Cookies and site data stay inside WebKit's own storage under
 `data/`. Nothing is written outside the profile directory, and no global GTK,
 desktop, or OpenCode configuration is touched.
 
@@ -136,11 +140,32 @@ of non-web schemes, bare-host normalization, search requiring an explicit
 endpoint, `0700`/`0600` permissions, and the CLI exit-code contract. It needs
 no Internet access.
 
-**Not covered here:** a GTK window with live WebKit content. That needs
-`WebKitWebDriver` plus a display server, and this slice has no WebDriver test
-target, so the window behaviour is documented and code-reviewed rather than
-claimed as automated coverage. The profile, storage, navigation, and CLI layers
-are covered by the contract above.
+### Manual GUI verification
+
+The window and live WebKit rendering are verified by hand on a real session,
+not by the automated contract. Serve a fixture and start the browser:
+
+```sh
+make build
+(cd tests/fixtures && python3 -m http.server 8123 --bind 127.0.0.1 &)
+./target/debug/rbrowse --profile-dir "$(mktemp -d)" \
+    --start-url http://127.0.0.1:8123/one.html
+```
+
+Expected: one `Tab 1`, the address entry showing the requested URL, the fixture
+body rendered by WebKit, and `data/` populated with WebKit's own storage. This
+is how the two-tab and blank-address regressions seen during development were
+found, so it is worth repeating after tab-strip changes.
+
+**Not covered by automation:** the GUI. `WebKitWebDriver` is installed and works
+against WebKit's own MiniBrowser, but it cannot drive this shell yet:
+WebKitGTK 6.0 requires the app to answer
+`WebKitAutomationSession::create-web-view` and return a view created with
+`is-controlled-by-automation`, and the `webkit6` 0.6.1 bindings (the current
+release) do not expose that detailed signal. Rather than ship a fragile
+hand-written closure around it, the slice leaves GUI automation out and says so.
+The profile, storage, navigation, and CLI layers are covered by the contract
+above.
 
 ## Privacy and current boundaries
 

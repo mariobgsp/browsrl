@@ -47,7 +47,9 @@
     },
     {
       "details": {
-        "database_mode": "0o600",
+        "database_modes": {
+          "session.sqlite": "0o600"
+        },
         "profile": "temporary profile directory",
         "profile_mode": "0o700"
       },
@@ -67,8 +69,8 @@
   ],
   "network": "loopback fixtures only",
   "not_covered": [
-    "GTK window rendering and WebKit page load need a display plus WebKitWebDriver",
-    "no Xvfb or WebKitWebDriver is installed on this host"
+    "the GTK window and WebKit page load are checked by hand (see README), not by this contract",
+    "WebDriver automation of this app is blocked: WebKitGTK 6.0 requires the app to answer WebKitAutomationSession::create-web-view, which webkit6 0.6.1 does not expose"
   ],
   "passed": true
 }

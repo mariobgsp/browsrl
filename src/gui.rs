@@ -8,7 +8,7 @@ use rbrowse::{config::Config, navigation, storage};
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use webkit6::prelude::*;
-use webkit6::{LoadEvent, NetworkSession, WebView};
+use webkit6::{LoadEvent, NetworkSession, WebContext, WebView};
 
 pub const APPLICATION_ID: &str = "io.github.rbrowse.RBrowse";
 
@@ -30,6 +30,15 @@ impl TabMode {
     }
 }
 
+/// Resources shared by every tab in one window.
+#[derive(Clone)]
+struct Browser {
+    context: Rc<WebContext>,
+    normal_network: NetworkHandle,
+    private_network: NetworkHandle,
+    search_endpoint: Option<String>,
+}
+
 struct PageState {
     content: gtk::Box,
     placeholder: gtk::Label,
@@ -40,6 +49,7 @@ struct PageState {
     mode: TabMode,
     page: RefCell<Option<adw::TabPage>>,
     network: NetworkHandle,
+    context: Rc<WebContext>,
     view: RefCell<Option<WebView>>,
 }
 
@@ -78,11 +88,18 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
     } else {
         Vec::new()
     };
-    let normal_network = Rc::new(NetworkSession::new(
-        Some(data_path(&config)?),
-        Some(cache_path(&config)?),
-    ));
-    let private_network = Rc::new(NetworkSession::new_ephemeral());
+    // One explicit WebKit context for the whole window. Owning it here keeps
+    // the process pool, the network sessions, and any future per-window
+    // settings in one place instead of implicit defaults.
+    let browser = Browser {
+        context: Rc::new(WebContext::new()),
+        normal_network: Rc::new(NetworkSession::new(
+            Some(data_path(&config)?),
+            Some(cache_path(&config)?),
+        )),
+        private_network: Rc::new(NetworkSession::new_ephemeral()),
+        search_endpoint: config.search_endpoint.clone(),
+    };
 
     let tab_view = adw::TabView::new();
     let tab_bar = adw::TabBar::new();
@@ -116,11 +133,10 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
     for tab in restored {
         let (page, state) = create_page(
             &tab_view,
+            &browser,
             tab.url,
             TabMode::Normal,
             states.borrow().len() + 1,
-            normal_network.clone(),
-            config.search_endpoint.clone(),
         );
         states.borrow_mut().push(state);
         if tab.selected {
@@ -132,14 +148,7 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
             &config.start_url,
             config.search_endpoint.as_deref(),
         )?;
-        let (page, state) = create_page(
-            &tab_view,
-            url,
-            TabMode::Normal,
-            1,
-            normal_network.clone(),
-            config.search_endpoint.clone(),
-        );
+        let (page, state) = create_page(&tab_view, &browser, url, TabMode::Normal, 1);
         states.borrow_mut().push(state);
         selected_page = Some(page);
     }
@@ -162,17 +171,15 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
 
     let states_for_new = Rc::clone(&states);
     let view_for_new = tab_view.clone();
-    let network_for_new = normal_network.clone();
-    let endpoint_for_new = config.search_endpoint.clone();
+    let browser_for_new = browser.clone();
     new_tab.connect_clicked(move |_| {
         let number = states_for_new.borrow().len() + 1;
         let (page, state) = create_page(
             &view_for_new,
+            &browser_for_new,
             "about:blank".to_string(),
             TabMode::Normal,
             number,
-            network_for_new.clone(),
-            endpoint_for_new.clone(),
         );
         states_for_new.borrow_mut().push(state.clone());
         view_for_new.set_selected_page(&page);
@@ -181,17 +188,15 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
 
     let states_for_private = Rc::clone(&states);
     let view_for_private = tab_view.clone();
-    let network_for_private = private_network.clone();
-    let endpoint_for_private = config.search_endpoint.clone();
+    let browser_for_private = browser.clone();
     private_tab.connect_clicked(move |_| {
         let number = states_for_private.borrow().len() + 1;
         let (page, state) = create_page(
             &view_for_private,
+            &browser_for_private,
             "about:blank".to_string(),
             TabMode::Private,
             number,
-            network_for_private.clone(),
-            endpoint_for_private.clone(),
         );
         states_for_private.borrow_mut().push(state.clone());
         view_for_private.set_selected_page(&page);
@@ -268,11 +273,10 @@ fn find_state(states: &Rc<RefCell<Vec<PageRef>>>, page: &adw::TabPage) -> Option
 
 fn create_page(
     tab_view: &adw::TabView,
+    browser: &Browser,
     url: String,
     mode: TabMode,
     number: usize,
-    network: NetworkHandle,
-    search_endpoint: Option<String>,
 ) -> (adw::TabPage, PageRef) {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.set_hexpand(true);
@@ -325,11 +329,15 @@ fn create_page(
         title: RefCell::new(mode.title(number)),
         mode,
         page: RefCell::new(None),
-        network,
+        network: match mode {
+            TabMode::Normal => browser.normal_network.clone(),
+            TabMode::Private => browser.private_network.clone(),
+        },
+        context: browser.context.clone(),
         view: RefCell::new(None),
     });
 
-    connect_address(&state, &address, search_endpoint);
+    connect_address(&state, &address, browser.search_endpoint.clone());
     connect_history_button(&state, &back, HistoryAction::Back);
     connect_history_button(&state, &forward, HistoryAction::Forward);
     connect_reload(&state, &reload);
@@ -412,6 +420,7 @@ fn realize_page(state: &PageRef) {
     }
     let url = state.url.borrow().clone();
     let view = WebView::builder()
+        .web_context(state.context.as_ref())
         .network_session(state.network.as_ref())
         .build();
     let weak: Weak<PageState> = Rc::downgrade(state);
