@@ -1,0 +1,74 @@
+{
+  "binary": "target/debug/rbrowse",
+  "checks": [
+    {
+      "details": {
+        "fixture_path": "/one.html",
+        "reloaded_matches": true,
+        "restored": null
+      },
+      "name": "offline_fixture_url_and_sqlite_round_trip",
+      "passed": true
+    },
+    {
+      "details": {
+        "restored_fixture_path": "/one.html",
+        "restored_matches": true
+      },
+      "name": "profile_restore_input",
+      "passed": true
+    },
+    {
+      "details": {
+        "errors": {
+          "about:settings": "smoke check failed: only about:blank is supported",
+          "data:text/html,x": "smoke check failed: only http, https, and about:blank are supported",
+          "file:///etc/passwd": "smoke check failed: only http, https, and about:blank are supported",
+          "javascript:alert(1)": "smoke check failed: only http, https, and about:blank are supported"
+        }
+      },
+      "name": "navigation_rejects_non_web_schemes",
+      "passed": true
+    },
+    {
+      "details": {
+        "requested": "https://example.com/"
+      },
+      "name": "bare_host_normalizes_to_https",
+      "passed": true
+    },
+    {
+      "details": {
+        "with_endpoint": "https://duckduckgo.com/?q=rust+webkit",
+        "without_endpoint": "smoke check failed: search is disabled; configure an explicit --search-endpoint"
+      },
+      "name": "search_requires_explicit_endpoint",
+      "passed": true
+    },
+    {
+      "details": {
+        "database_mode": "0o600",
+        "profile": "temporary profile directory",
+        "profile_mode": "0o700"
+      },
+      "name": "profile_and_database_are_user_private",
+      "passed": true
+    },
+    {
+      "details": {
+        "help_code": 0,
+        "missing_value_code": 2,
+        "unknown_code": 2,
+        "version_code": 0
+      },
+      "name": "command_line_exit_codes",
+      "passed": true
+    }
+  ],
+  "network": "loopback fixtures only",
+  "not_covered": [
+    "GTK window rendering and WebKit page load need a display plus WebKitWebDriver",
+    "no Xvfb or WebKitWebDriver is installed on this host"
+  ],
+  "passed": true
+}

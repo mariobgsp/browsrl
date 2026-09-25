@@ -1,0 +1,34 @@
+@startuml
+!pragma layout smetana
+title R Browse profile layout and privacy boundary
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+folder "PROFILE_DIR (default $XDG_DATA_HOME/rbrowse)\nmode 0700, created on start" as Profile {
+  folder "data/ 0700\nWebKit website data" as Data
+  folder "cache/ 0700\nWebKit disk cache" as Cache
+  database "session.sqlite 0600\nsession_tabs: id, position, url, title, selected" as Session
+  folder "private session\nephemeral NetworkSession" as Private
+}
+
+package "Process boundaries" as Procs {
+  rectangle "rbrowse UI\nno network client of its own" as UI
+  rectangle "WebKitNetworkProcess\ncookies, TLS, cache" as Net
+  rectangle "WebKitWebProcess\nsandboxed, renders pages" as Web
+  rectangle "WebKitGPUProcess" as GPU
+}
+
+cloud "Web pages\nhttp(s) only" as Internet
+note "Not in this slice:\ntelemetry, account, sync,\nremote history, updates." as None
+
+UI --> Session : write normal tabs on close
+UI --> Private : in-memory only, never persisted
+UI --> Net : NetworkSession(data, cache)
+Net --> Data : cookies, local storage
+Net --> Cache : HTTP cache
+Web --> Net : page requests
+Net --> Internet : only egress path
+GPU --> Web : compositing
+None ..> UI : "no code path"
+@enduml

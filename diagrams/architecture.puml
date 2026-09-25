@@ -1,0 +1,45 @@
+@startuml
+!pragma layout smetana
+title R Browse module architecture (first slice)
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+actor User
+
+package "rbrowse binary (feature = webkit)" as Shell {
+  rectangle "main.rs\nargv parsing, smoke path, exit codes" as Main
+  rectangle "gui.rs\nAdwApplication, window, AdwTabView, PageState" as Gui
+  rectangle "WebView\nrealized on first selection,\nrenders pages for the user" as WebView
+}
+
+package "rbrowse library (no GUI deps)" as Core {
+  rectangle "config\nCLI + profile paths + permissions" as Config
+  rectangle "navigation\nURL and search policy" as Navigation
+  rectangle "storage\nSQLite session_tabs" as Storage
+}
+
+package "WebKitGTK 6.0" as WebKit {
+  rectangle "WebKitWebProcess\nsandboxed renderer" as WebProc
+  rectangle "WebKitNetworkProcess\ncookies, TLS, cache" as NetProc
+  rectangle "WebKitGPUProcess" as GPUProc
+}
+
+database "profile/session.sqlite\n0600" as Db
+folder "profile/data + profile/cache\n0700" as WebsiteData
+cloud "http(s) pages reached by the user" as Pages
+
+User --> Main : argv
+Main --> Gui : normal start
+Main --> Storage : --smoke
+Gui --> Config : profile, search endpoint
+Gui --> Navigation : address submit
+Gui --> Storage : save normal tabs
+Storage --> Db : transactional replace
+Config --> WebsiteData : NetworkSession roots
+WebView --> WebProc : page content
+WebProc --> NetProc : requests
+WebProc --> GPUProc : compositing
+NetProc --> WebsiteData : site data
+NetProc --> Pages : only egress path
+@enduml

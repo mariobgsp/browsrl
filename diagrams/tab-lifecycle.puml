@@ -1,0 +1,35 @@
+@startuml
+!pragma layout smetana
+title R Browse tab lifecycle (lazy WebView realization)
+
+[*] --> Start : application activate
+Start --> Restoring : restore_session and stored rows exist
+Start --> Placeholder : start URL or first tab
+Restoring --> Placeholder : create_page(url) per row
+
+state Placeholder {
+  [*] --> Toolbar
+  Toolbar : address, back/forward, reload\nno WebKit view yet
+}
+
+Placeholder --> Realizing : tab selected
+Realizing --> Loading : WebView::load_uri(url)
+Loading --> Ready : LoadEvent::Finished
+Loading --> Failed : page load error
+Ready --> Failed : address rejected by policy
+Failed --> Loading : corrected address
+Ready --> Ready : tab reselected, WebView kept alive
+Ready --> Loading : address entry or button
+Ready --> Closing : close requested
+Loading --> Closing : close requested
+Closing --> Empty : it was the last remaining tab
+Empty --> Placeholder : reset to about:blank, keep the window
+Closing --> [*] : window closed, session saved
+
+note bottom of Placeholder
+  A WebView is created only when a tab is
+  first selected. Private tabs share one
+  ephemeral NetworkSession and are never
+  written to the session database.
+end note
+@enduml

@@ -1,0 +1,7 @@
+/target/
+diagrams/rendered/
+__pycache__/
+.pi/
+artifacts/perf.json
+*.swp
+.DS_Store
