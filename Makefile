@@ -9,6 +9,13 @@ export PKG_CONFIG_SYSROOT_DIR := $(WEBKIT_ROOT)
 export LD_LIBRARY_PATH := $(WEBKIT_PREFIX)/lib:$(LD_LIBRARY_PATH)
 endif
 
+# Bound the compiler's parallelism. rustc peaks at roughly a gigabyte per crate,
+# so building gtk4, libadwaita and webkit6 side by side with anything else on
+# the machine is what pushed this host into swap. Raise it where there is memory
+# to spare: `make CARGO_BUILD_JOBS=8 build`.
+CARGO_BUILD_JOBS ?= 2
+export CARGO_BUILD_JOBS
+
 PREFIX ?= /usr
 DESTDIR ?=
 BINDIR := $(DESTDIR)$(PREFIX)/bin
@@ -26,6 +33,7 @@ GATE := fmt-check clippy check-core build e2e
         install uninstall
 
 doctor:
+	@printf 'cargo jobs: %s (override with CARGO_BUILD_JOBS)\n' "$(CARGO_BUILD_JOBS)"
 	@printf 'rustc: '; rustc --version
 	@printf 'cargo: '; cargo --version
 	@for package in gtk4 libadwaita-1 webkitgtk-6.0 sqlite3; do \

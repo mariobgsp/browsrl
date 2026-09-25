@@ -248,13 +248,23 @@ assertion.
   own: every request goes through the WebKit network process.
 * Wayland is preferred by the native GTK stack, with the GTK X11 fallback.
 
-Deliberately deferred: passwords (Secret Service is not
-wired yet), extensions, DRM playback, packaging, desktop integration, and update
-management. A visible list of bookmarks and history is also still missing: both
-stores work and are asserted by the contract, but there is no window for them
-yet, only the star toggle.
-WebKitGTK 2.52 exposes only part of the WebExtensions surface, so extension
-work is gated on the API actually present rather than emulated.
+Deliberately not implemented:
+
+| Missing | Why |
+| --- | --- |
+| Password storage | Needs Secret Service; the profile would otherwise hold credentials it should not |
+| Extensions | WebKitGTK 2.52 exposes only part of the WebExtensions surface, so this is gated on the API that actually exists rather than emulated |
+| DRM playback | No Widevine or equivalent in WebKitGTK; nothing to wire up |
+| Update management | A browser with an updater is a browser with a remote channel; this one has none by design |
+| Reader-mode extraction | The readability pass restyles a page; it does not extract an article the way a reader engine would |
+| Find in page, print, save page, zoom controls | Not implemented |
+| Tab reordering by drag, tear-off windows, closed-tab restore | Not implemented |
+| Content blocking | Not implemented |
+| Site permissions and prompts | WebKit handles the defaults; there is no per-site UI |
+| Archive packaging | `make install` covers local installation, not submission to a distribution |
+
+This is a working browser shell, not a finished product, and it is not a
+functional superset of the macOS browser it is inspired by.
 
 ## Installing
 
