@@ -1,7 +1,7 @@
 //! R Browse entry point: argument handling, the offline smoke path, and the
 //! native shell hand-off.
 
-use rbrowse::{config::Config, navigation, storage};
+use rbrowse::{config::Config, downloads, navigation, storage};
 use serde_json::json;
 
 #[cfg(feature = "webkit")]
@@ -81,6 +81,33 @@ fn run_storage_check(config: &Config) -> Result<(), String> {
     let history_after_clear = store.history_len()?;
     let rejected = store.add_bookmark("file:///etc/passwd", "nope").is_err();
 
+    // Download names are server-controlled, so the destination policy is part
+    // of the same head-less contract rather than only a GUI concern.
+    let download_dir = config.download_dir().to_path_buf();
+    let taken: fn(&str) -> bool = |_| false;
+    let cases = [
+        ("report.pdf", Some("report.pdf")),
+        ("../../etc/passwd", Some("passwd")),
+        ("/etc/shadow", Some("shadow")),
+        (".bashrc", None),
+        ("..", None),
+        ("", None),
+    ];
+    let mut names_ok = true;
+    let mut observed: Vec<(String, Option<String>)> = Vec::new();
+    for (suggested, expected) in cases {
+        let chosen = downloads::destination_for(&download_dir, suggested, taken).and_then(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        });
+        names_ok &= chosen.as_deref() == expected;
+        observed.push((suggested.to_string(), chosen));
+    }
+    let escapes = downloads::destination_for(&download_dir, "../../escape.txt", taken)
+        .and_then(|path| path.parent().map(|parent| parent == download_dir))
+        .unwrap_or(false);
+    names_ok &= escapes;
+
     let ok = first_add
         && !second_add
         && stored_title == "Example, renamed"
@@ -93,7 +120,8 @@ fn run_storage_check(config: &Config) -> Result<(), String> {
         && newest == "https://second.example/"
         && cleared == 2
         && history_after_clear == 0
-        && rejected;
+        && rejected
+        && names_ok;
 
     println!(
         "{}",
@@ -113,6 +141,8 @@ fn run_storage_check(config: &Config) -> Result<(), String> {
             "history_cleared": cleared,
             "history_after_clear": history_after_clear,
             "bookmark_rejects_file_url": rejected,
+            "download_name_policy": observed,
+            "download_stays_in_profile": escapes,
         })
     );
     Ok(())

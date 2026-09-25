@@ -109,6 +109,33 @@
           "bookmark_rejects_file_url": true,
           "bookmark_removed": true,
           "bookmark_stored_title": "Example, renamed",
+          "download_name_policy": [
+            [
+              "report.pdf",
+              "report.pdf"
+            ],
+            [
+              "../../etc/passwd",
+              "passwd"
+            ],
+            [
+              "/etc/shadow",
+              "shadow"
+            ],
+            [
+              ".bashrc",
+              null
+            ],
+            [
+              "..",
+              null
+            ],
+            [
+              "",
+              null
+            ]
+          ],
+          "download_stays_in_profile": true,
           "history_after_clear": 0,
           "history_cleared": 2,
           "history_first_visit": true,

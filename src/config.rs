@@ -48,6 +48,8 @@ pub struct Config {
     pub database_path: PathBuf,
     pub data_dir: PathBuf,
     pub cache_dir: PathBuf,
+    /// Downloads land here, inside the profile, never where a page asks.
+    pub download_dir: PathBuf,
     pub start_url: String,
     pub search_endpoint: Option<String>,
     pub restore_session: bool,
@@ -77,6 +79,7 @@ impl Config {
         let mut database_path = None;
         let mut data_dir = None;
         let mut cache_dir = None;
+        let mut download_dir = None;
         let mut start_url = DEFAULT_URL.to_string();
         let mut search_endpoint = None;
         let mut restore_session = true;
@@ -108,6 +111,12 @@ impl Config {
                     cache_dir =
                         Some(PathBuf::from(args.next().ok_or_else(|| {
                             CliError::usage("--cache-dir needs a path")
+                        })?));
+                }
+                "--download-dir" => {
+                    download_dir =
+                        Some(PathBuf::from(args.next().ok_or_else(|| {
+                            CliError::usage("--download-dir needs a path")
                         })?));
                 }
                 "--start-url" => {
@@ -147,15 +156,18 @@ impl Config {
         let database_path = database_path.unwrap_or_else(|| profile_dir.join("session.sqlite"));
         let data_dir = data_dir.unwrap_or_else(|| profile_dir.join("data"));
         let cache_dir = cache_dir.unwrap_or_else(|| profile_dir.join("cache"));
+        let download_dir = download_dir.unwrap_or_else(|| profile_dir.join("downloads"));
         validate_path("--database-path", &database_path)?;
         validate_path("--data-dir", &data_dir)?;
         validate_path("--cache-dir", &cache_dir)?;
+        validate_path("--download-dir", &download_dir)?;
 
         Ok(Self {
             profile_dir,
             database_path,
             data_dir,
             cache_dir,
+            download_dir,
             start_url,
             search_endpoint,
             restore_session,
@@ -176,10 +188,15 @@ impl Config {
         self.cache_dir.as_path()
     }
 
+    pub fn download_dir(&self) -> &Path {
+        self.download_dir.as_path()
+    }
+
     pub fn ensure_profile_dirs(&self) -> Result<(), String> {
         ensure_private_directory(&self.profile_dir)?;
         ensure_private_directory(&self.data_dir)?;
         ensure_private_directory(&self.cache_dir)?;
+        ensure_private_directory(&self.download_dir)?;
         if let Some(parent) = self.database_path.parent()
             && parent.starts_with(&self.profile_dir)
         {
@@ -238,7 +255,8 @@ fn ensure_private_directory(path: &Path) -> Result<(), String> {
 pub fn usage() -> String {
     concat!(
         "Usage: rbrowse [--profile-dir PATH] [--database-path PATH] [--data-dir PATH] ",
-        "[--cache-dir PATH] [--start-url URL] [--search-endpoint URL] [--no-restore] ",
+        "[--cache-dir PATH] [--download-dir PATH] [--start-url URL] ",
+        "[--search-endpoint URL] [--no-restore] ",
         "[--smoke] [--storage-check]"
     )
     .to_string()

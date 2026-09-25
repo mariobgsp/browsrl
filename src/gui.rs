@@ -4,11 +4,62 @@ use gtk4 as gtk;
 use gtk4::glib::Propagation;
 use gtk4::prelude::*;
 use libadwaita as adw;
-use rbrowse::{config::Config, navigation, storage};
+use rbrowse::{config::Config, downloads, navigation, storage};
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use webkit6::prelude::*;
-use webkit6::{LoadEvent, NetworkSession, WebContext, WebView};
+use webkit6::{Download, LoadEvent, NetworkSession, WebContext, WebView};
+
+/// Attach download handling to a network session.
+///
+/// WebKit asks for a destination with a server-supplied name, so the answer is
+/// always a path inside the profile's download directory. A name that cannot be
+/// made safe is refused rather than guessed at, and the user sees why.
+fn watch_downloads(session: &NetworkSession, download_dir: PathBuf) {
+    let dir = download_dir.clone();
+    session.connect_download_started(move |_, download| {
+        let dir = dir.clone();
+        watch_one_download(download, &dir);
+    });
+}
+
+fn watch_one_download(download: &Download, download_dir: &std::path::Path) {
+    let dir = download_dir.to_path_buf();
+    // The suggested name arrives with the destination request rather than from
+    // the response, which is not available yet at this point in WebKit 6.0.
+    {
+        // One reference registers the handler, a second is moved into it: a
+        // closure that captured the value it is registered on would not
+        // outlive the call.
+        let registrar = download.clone();
+        let owner = download.clone();
+        registrar.connect_decide_destination(move |_, suggested| {
+            match downloads::destination_for(&dir, suggested, |_| false) {
+                Some(path) => {
+                    let path = path.to_string_lossy().into_owned();
+                    owner.set_destination(&path);
+                    true
+                }
+                // Refusing is better than writing outside the profile or
+                // inventing a name the server did not ask for.
+                None => false,
+            }
+        });
+    }
+    let for_created = download.clone();
+    for_created.connect_created_destination(move |_, path| {
+        println!("download started: {path}");
+    });
+    let for_failure = download.clone();
+    for_failure.connect_failed(move |_, error| {
+        eprintln!("download failed: {error}");
+    });
+    let for_finished = download.clone();
+    for_finished.connect_finished(move |_| {
+        println!("download finished");
+    });
+}
 
 pub const APPLICATION_ID: &str = "io.github.rbrowse.RBrowse";
 
@@ -38,6 +89,7 @@ struct Browser {
     private_network: NetworkHandle,
     search_endpoint: Option<String>,
     store: Rc<RefCell<storage::SessionStore>>,
+    download_dir: PathBuf,
 }
 
 struct PageState {
@@ -286,7 +338,11 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         )),
         private_network: Rc::new(NetworkSession::new_ephemeral()),
         search_endpoint: config.search_endpoint.clone(),
+        download_dir: config.download_dir().to_path_buf(),
     };
+
+    watch_downloads(&browser.normal_network, browser.download_dir.clone());
+    watch_downloads(&browser.private_network, browser.download_dir.clone());
 
     let tab_view = adw::TabView::new();
     let tab_bar = adw::TabBar::new();
