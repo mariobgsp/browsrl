@@ -37,6 +37,7 @@ struct Browser {
     normal_network: NetworkHandle,
     private_network: NetworkHandle,
     search_endpoint: Option<String>,
+    store: Rc<RefCell<storage::SessionStore>>,
 }
 
 struct PageState {
@@ -51,6 +52,183 @@ struct PageState {
     network: NetworkHandle,
     context: Rc<WebContext>,
     view: RefCell<Option<WebView>>,
+    /// Toolbar button that reflects and toggles the bookmark state.
+    bookmark: gtk::Button,
+    /// Profile store, shared with the window so a finished load can be recorded
+    /// without reaching back into the tab list.
+    store: Rc<RefCell<storage::SessionStore>>,
+}
+
+/// The window's shared state.
+///
+/// Toolbar buttons, tab signals and keyboard actions all operate on the same
+/// tab list, so they share one handle instead of cloning a separate `Rc` per
+/// callback. Every method is fallible-free at the call site: storage errors are
+/// reported in the affected tab's status line instead of panicking.
+#[derive(Clone)]
+struct Shell {
+    states: Rc<RefCell<Vec<PageRef>>>,
+    tab_view: adw::TabView,
+    store: Rc<RefCell<storage::SessionStore>>,
+    browser: Browser,
+}
+
+/// One keyboard action: its name, its accelerators, and what it does.
+type ActionBinding = (&'static str, &'static [&'static str], fn(&Shell));
+
+impl Shell {
+    fn selected(&self) -> Option<PageRef> {
+        let page = self.tab_view.selected_page()?;
+        find_state(&self.states, &page)
+    }
+
+    fn note(&self, state: &PageRef, message: &str) {
+        state.status.set_text(message);
+    }
+
+    fn add_tab(&self, mode: TabMode, url: &str) {
+        let number = self.states.borrow().len() + 1;
+        let (page, state) = create_page(
+            &self.tab_view,
+            &self.browser,
+            url.to_string(),
+            mode,
+            number,
+            None,
+        );
+        self.states.borrow_mut().push(state.clone());
+        self.tab_view.set_selected_page(&page);
+        realize_page(&state);
+    }
+
+    /// Open a URL in the selected tab, reporting a rejection in its status line.
+    fn navigate_selected(&self, input: &str) {
+        let Some(state) = self.selected() else {
+            return;
+        };
+        if let Err(error) = navigate_state(&state, input, self.browser.search_endpoint.as_deref()) {
+            self.note(&state, &error);
+        }
+    }
+
+    /// Toggle the bookmark for the selected tab and reflect the result.
+    fn toggle_bookmark(&self) {
+        let Some(state) = self.selected() else {
+            return;
+        };
+        toggle_bookmark(&state, &self.browser.store);
+    }
+
+    /// Reflect the bookmark state of a tab after a page load.
+    fn refresh_bookmark(&self, state: &PageRef) {
+        let url = current_state_url(state);
+        let bookmarked = if url == "about:blank" {
+            false
+        } else {
+            self.store.borrow().is_bookmarked(&url).unwrap_or(false)
+        };
+        set_bookmark_icon(state, bookmarked);
+    }
+
+    fn close_selected(&self) {
+        if let Some(page) = self.tab_view.selected_page() {
+            self.tab_view.close_page(&page);
+        }
+    }
+
+    fn select_relative(&self, next: bool) {
+        // AdwTabView owns the ordering, so let it do the wrapping rather than
+        // reimplementing index arithmetic over the page list.
+        if next {
+            self.tab_view.select_next_page();
+        } else {
+            self.tab_view.select_previous_page();
+        }
+    }
+
+    fn save(&self) {
+        save_sessions(&self.states, &self.tab_view, &self.store);
+    }
+
+    fn reload_selected(&self) {
+        let Some(state) = self.selected() else {
+            return;
+        };
+        let Some(view) = state.view.borrow().clone() else {
+            self.navigate_selected("about:blank");
+            return;
+        };
+        match view.uri() {
+            Some(uri) => view.load_uri(uri.as_str()),
+            None => self.note(&state, "This tab has no address to reload."),
+        }
+    }
+
+    fn focus_address(&self) {
+        if let Some(state) = self.selected() {
+            state.address.grab_focus();
+            state.address.select_region(0, -1);
+        }
+    }
+
+    fn copy_address(&self) {
+        let Some(state) = self.selected() else {
+            return;
+        };
+        let url = current_state_url(&state);
+        state.address.clipboard().set_text(&url);
+        self.note(&state, "Address copied");
+    }
+}
+
+/// Add or remove the bookmark for a tab, reporting the outcome in its status
+/// line. Shared by the toolbar button and the Ctrl+D action so both behave
+/// identically, including the refusals for private and blank tabs.
+fn toggle_bookmark(state: &PageRef, store: &Rc<RefCell<storage::SessionStore>>) {
+    if state.mode == TabMode::Private {
+        state.status.set_text("Private tabs are not bookmarked");
+        return;
+    }
+    let url = current_state_url(state);
+    if url == "about:blank" {
+        state
+            .status
+            .set_text("There is nothing to bookmark on a blank tab");
+        return;
+    }
+    let title = state.title.borrow().clone();
+    let outcome = {
+        let store = store.borrow();
+        match store.is_bookmarked(&url) {
+            Ok(true) => store.remove_bookmark(&url).map(|_| false),
+            Ok(false) => store.add_bookmark(&url, &title).map(|_| true),
+            Err(error) => Err(error),
+        }
+    };
+    match outcome {
+        Ok(true) => {
+            set_bookmark_icon(state, true);
+            state.status.set_text("Bookmarked");
+        }
+        Ok(false) => {
+            set_bookmark_icon(state, false);
+            state.status.set_text("Bookmark removed");
+        }
+        Err(error) => state.status.set_text(&format!("bookmark failed: {error}")),
+    }
+}
+
+fn set_bookmark_icon(state: &PageRef, bookmarked: bool) {
+    state.bookmark.set_icon_name(if bookmarked {
+        "starred-symbolic"
+    } else {
+        "non-starred-symbolic"
+    });
+    state.bookmark.set_tooltip_text(Some(if bookmarked {
+        "Remove bookmark (Ctrl+D)"
+    } else {
+        "Bookmark this page (Ctrl+D)"
+    }));
 }
 
 pub fn run(config: Config) -> Result<(), String> {
@@ -101,6 +279,7 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
     // settings in one place instead of implicit defaults.
     let browser = Browser {
         context: Rc::new(WebContext::new()),
+        store: Rc::clone(&store),
         normal_network: Rc::new(NetworkSession::new(
             Some(data_path(&config)?),
             Some(cache_path(&config)?),
@@ -169,59 +348,37 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         realize_page(&state);
     }
 
-    let states_for_select = Rc::clone(&states);
+    let shell = Shell {
+        states: Rc::clone(&states),
+        tab_view: tab_view.clone(),
+        store: Rc::clone(&store),
+        browser: browser.clone(),
+    };
+
+    // Tab selection realizes the page and syncs its bookmark indicator.
+    let shell_for_select = shell.clone();
     tab_view.connect_selected_page_notify(move |view| {
         let Some(page) = view.selected_page() else {
             return;
         };
-        if let Some(state) = find_state(&states_for_select, &page) {
+        if let Some(state) = find_state(&shell_for_select.states, &page) {
             realize_page(&state);
+            shell_for_select.refresh_bookmark(&state);
         }
     });
 
-    let states_for_new = Rc::clone(&states);
-    let view_for_new = tab_view.clone();
-    let browser_for_new = browser.clone();
-    new_tab.connect_clicked(move |_| {
-        let number = states_for_new.borrow().len() + 1;
-        let (page, state) = create_page(
-            &view_for_new,
-            &browser_for_new,
-            "about:blank".to_string(),
-            TabMode::Normal,
-            number,
-            None,
-        );
-        states_for_new.borrow_mut().push(state.clone());
-        view_for_new.set_selected_page(&page);
-        realize_page(&state);
-    });
+    let shell_for_new = shell.clone();
+    new_tab.connect_clicked(move |_| shell_for_new.add_tab(TabMode::Normal, "about:blank"));
 
-    let states_for_private = Rc::clone(&states);
-    let view_for_private = tab_view.clone();
-    let browser_for_private = browser.clone();
-    private_tab.connect_clicked(move |_| {
-        let number = states_for_private.borrow().len() + 1;
-        let (page, state) = create_page(
-            &view_for_private,
-            &browser_for_private,
-            "about:blank".to_string(),
-            TabMode::Private,
-            number,
-            None,
-        );
-        states_for_private.borrow_mut().push(state.clone());
-        view_for_private.set_selected_page(&page);
-        realize_page(&state);
-    });
+    let shell_for_private = shell.clone();
+    private_tab
+        .connect_clicked(move |_| shell_for_private.add_tab(TabMode::Private, "about:blank"));
 
-    let states_for_close = Rc::clone(&states);
-    let view_for_close = tab_view.clone();
-    let store_for_close = Rc::clone(&store);
+    let shell_for_close = shell.clone();
     let endpoint_for_close = config.search_endpoint.clone();
     tab_view.connect_close_page(move |_, page| {
         let position = {
-            let states = states_for_close.borrow();
+            let states = shell_for_close.states.borrow();
             states
                 .iter()
                 .position(|state| state.page.borrow().as_ref() == Some(page))
@@ -230,7 +387,7 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
             return Propagation::Proceed;
         };
         let last = {
-            let states = states_for_close.borrow();
+            let states = shell_for_close.states.borrow();
             (states.len() == 1)
                 .then(|| states.get(position).cloned())
                 .flatten()
@@ -239,26 +396,66 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
             // Never leave the window without a page: the last tab resets to
             // about:blank instead of closing.
             let _ = navigate_state(&state, "about:blank", endpoint_for_close.as_deref());
-            save_sessions(&states_for_close, &view_for_close, &store_for_close);
+            shell_for_close.save();
             return Propagation::Stop;
         }
-        states_for_close.borrow_mut().remove(position);
+        shell_for_close.states.borrow_mut().remove(position);
         // Renumber so the strip stays dense ("Tab 1", "Tab 2") after a close.
-        renumber_tabs(&states_for_close);
-        save_sessions(&states_for_close, &view_for_close, &store_for_close);
+        renumber_tabs(&shell_for_close.states);
+        shell_for_close.save();
         Propagation::Proceed
     });
 
-    let states_for_window = Rc::clone(&states);
-    let view_for_window = tab_view.clone();
-    let store_for_window = Rc::clone(&store);
+    let shell_for_window = shell.clone();
     window.connect_close_request(move |_| {
-        save_sessions(&states_for_window, &view_for_window, &store_for_window);
+        shell_for_window.save();
         Propagation::Proceed
     });
 
+    install_actions(application, &shell);
     window.present();
     Ok(())
+}
+
+/// Register the window's keyboard actions.
+///
+/// These are `GAction`s on the application rather than key-press handlers, so
+/// GTK owns the accelerator table and the bindings work wherever focus is.
+fn install_actions(application: &adw::Application, shell: &Shell) {
+    // The closures live as long as the application, so they hold their own
+    // handle rather than borrowing the caller's.
+    let shell = shell.clone();
+    let actions: &[ActionBinding] = &[
+        ("new-tab", &["<Primary>t", "<Primary><Shift>n"], |shell| {
+            shell.add_tab(TabMode::Normal, "about:blank")
+        }),
+        ("new-private-tab", &["<Primary><Shift>p"], |shell| {
+            shell.add_tab(TabMode::Private, "about:blank")
+        }),
+        ("close-tab", &["<Primary>w"], Shell::close_selected),
+        (
+            "next-tab",
+            &["<Primary>Tab", "<Primary>Page_Down"],
+            |shell| shell.select_relative(true),
+        ),
+        (
+            "previous-tab",
+            &["<Primary><Shift>Tab", "<Primary>Page_Up"],
+            |shell| shell.select_relative(false),
+        ),
+        ("reload", &["<Primary>r", "F5"], Shell::reload_selected),
+        ("bookmark", &["<Primary>d"], Shell::toggle_bookmark),
+        ("focus-address", &["<Primary>l"], Shell::focus_address),
+        ("copy-page-address", &["<Primary>c"], Shell::copy_address),
+    ];
+    for (name, keys, handler) in actions {
+        let action = gtk::gio::SimpleAction::new(name, None);
+        let handler = *handler;
+        let shell = shell.clone();
+        action.connect_activate(move |_, _| handler(&shell));
+        application.add_action(&action);
+        application.set_accels_for_action(&format!("win.{name}"), keys);
+    }
 }
 
 fn data_path(config: &Config) -> Result<&str, String> {
@@ -323,6 +520,7 @@ fn create_page(
     forward.set_tooltip_text(Some("Forward"));
     let reload = gtk::Button::with_label("Reload");
     reload.set_tooltip_text(Some("Reload"));
+    let bookmark = gtk::Button::from_icon_name("non-starred-symbolic");
     let address = gtk::Entry::new();
     address.set_text(&url);
     address.set_placeholder_text(Some("Address (use search: for a configured search)"));
@@ -332,6 +530,7 @@ fn create_page(
         toolbar.append(button);
     }
     toolbar.append(&address);
+    toolbar.append(&bookmark);
     content.append(&toolbar);
 
     let placeholder = gtk::Label::new(Some("WebView is created when this tab is selected"));
@@ -370,12 +569,16 @@ fn create_page(
         },
         context: browser.context.clone(),
         view: RefCell::new(None),
+        bookmark: bookmark.clone(),
+        store: browser.store.clone(),
     });
 
     connect_address(&state, &address, browser.search_endpoint.clone());
     connect_history_button(&state, &back, HistoryAction::Back);
     connect_history_button(&state, &forward, HistoryAction::Forward);
     connect_reload(&state, &reload);
+    connect_bookmark_button(&state, &browser.store, &bookmark);
+    set_bookmark_icon(&state, false);
 
     let page = tab_view.append(&content);
     page.set_title(&title);
@@ -415,6 +618,23 @@ fn connect_history_button(state: &PageRef, button: &gtk::Button, action: History
             HistoryAction::Forward if view.can_go_forward() => view.go_forward(),
             _ => {}
         }
+    });
+}
+
+fn connect_bookmark_button(
+    state: &PageRef,
+    store: &Rc<RefCell<storage::SessionStore>>,
+    button: &gtk::Button,
+) {
+    // The click target is the tab itself, so the handler re-uses the same
+    // toggle the Ctrl+D action runs rather than duplicating the logic.
+    let weak: Weak<PageState> = Rc::downgrade(state);
+    let store = store.clone();
+    button.connect_clicked(move |_| {
+        let Some(state) = weak.upgrade() else {
+            return;
+        };
+        toggle_bookmark(&state, &store);
     });
 }
 
@@ -459,6 +679,7 @@ fn realize_page(state: &PageRef) {
         .network_session(state.network.as_ref())
         .build();
     let weak: Weak<PageState> = Rc::downgrade(state);
+    let store = state.store.clone();
     view.connect_load_changed(move |view, event| {
         let Some(state) = weak.upgrade() else {
             return;
@@ -485,6 +706,16 @@ fn realize_page(state: &PageRef) {
                         page.set_title(&title);
                     }
                 }
+                // A completed load is what history records; the shell writes it
+                // rather than injecting script into the page.
+                record_visit(&state, &store);
+                set_bookmark_icon(
+                    &state,
+                    store
+                        .borrow()
+                        .is_bookmarked(&current_state_url(&state))
+                        .unwrap_or(false),
+                );
             }
             _ => {}
         }
@@ -495,6 +726,21 @@ fn realize_page(state: &PageRef) {
     view.set_hexpand(true);
     *state.view.borrow_mut() = Some(view.clone());
     view.load_uri(&url);
+}
+
+/// Record a completed page load, skipping private tabs and reporting nothing to
+/// the user when the URL is one the navigation layer would not store.
+fn record_visit(state: &PageRef, store: &Rc<RefCell<storage::SessionStore>>) {
+    if state.mode == TabMode::Private {
+        return;
+    }
+    let url = current_state_url(state);
+    let title = state.title.borrow().clone();
+    if let Err(error) = store.borrow().record_visit(&url, &title)
+        && !error.starts_with("history URL is not allowed")
+    {
+        eprintln!("record visit: {error}");
+    }
 }
 
 fn current_state_url(state: &PageRef) -> String {

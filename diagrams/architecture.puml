@@ -16,7 +16,9 @@ package "rbrowse binary (feature = webkit)" as Shell {
 package "rbrowse library (no GUI deps)" as Core {
   rectangle "config\nCLI + profile paths + permissions" as Config
   rectangle "navigation\nURL and search policy" as Navigation
-  rectangle "storage\nSQLite session_tabs" as Storage
+  rectangle "storage\nSQLite schema + migration" as Storage
+  rectangle "bookmarks\nadd / remove / list" as Bookmarks
+  rectangle "history\nfinished-load records, capped" as History
 }
 
 package "WebKitGTK 6.0" as WebKit {
@@ -25,17 +27,22 @@ package "WebKitGTK 6.0" as WebKit {
   rectangle "WebKitGPUProcess" as GPUProc
 }
 
-database "profile/session.sqlite\n0600" as Db
+database "profile/session.sqlite\n0600, user_version = 2\nsession_tabs, bookmarks, history" as Db
 folder "profile/data + profile/cache\n0700" as WebsiteData
 cloud "http(s) pages reached by the user" as Pages
 
 User --> Main : argv
 Main --> Gui : normal start
 Main --> Storage : --smoke
+Main --> Storage : --storage-check
 Gui --> Config : profile, search endpoint
 Gui --> Navigation : address submit
 Gui --> Storage : save normal tabs
+Gui --> Bookmarks : Ctrl+D or star button
+Gui --> History : LoadEvent::Finished
 Storage --> Db : transactional replace
+Bookmarks --> Db
+History --> Db : prune to 5000 rows
 Config --> WebsiteData : NetworkSession roots
 WebView --> WebProc : page content
 WebProc --> NetProc : requests

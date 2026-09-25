@@ -6,10 +6,23 @@ implementation in the spirit of the macOS browser
 [driceroland/Search](https://github.com/driceroland/Search); no upstream code is
 vendored here, and this repository does not claim feature parity with it.
 
-This repository is a **first vertical slice**. What exists is a real window
-with tabs, a strict navigation boundary, lazy WebView creation, private tabs,
-and a local SQLite session record. Everything else is listed as deferred
-below rather than stubbed out.
+This repository is an early but working slice: a real window with tabs, a strict
+navigation boundary, lazy WebView creation, private tabs, bookmarks, browsing
+history, keyboard shortcuts, and a local SQLite profile. Everything still
+missing is listed as deferred below rather than stubbed out.
+
+## Features
+
+| Area | What works today |
+| --- | --- |
+| Tabs | Add, close, cycle, per-tab back/forward/reload, dense re-numbering, last tab resets instead of closing |
+| Navigation | Strict `http`/`https`/`about:blank` allowlist, bare hosts normalised to HTTPS, opt-in search |
+| Privacy | Private tabs on an ephemeral network session: never restored, never bookmarked, never in history |
+| Bookmarks | Star toggle in the toolbar or `Ctrl+D`, deduplicated by URL, `file:` and other schemes refused |
+| History | Written when WebKit reports a finished load, repeat visits collapsed, pruned to 5000 rows |
+| Session | Tabs restored on launch, saved on tab close and window close |
+| Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+C` |
+| Profile | One local directory, `0700`/`0600`, SQLite schema with in-place migration |
 
 ## Architecture
 
@@ -32,7 +45,9 @@ PNG fallbacks are committed next to the SVGs: [architecture](diagrams/architectu
 | `src/lib.rs` | Library root; no GUI dependencies. |
 | `src/config.rs` | CLI parsing, exit codes, profile paths, `0700` directory hardening. |
 | `src/navigation.rs` | The navigation policy: `http`, `https`, `about:blank`, and opt-in search. |
-| `src/storage.rs` | Versioned SQLite `session_tabs` schema, migration, transactional save, `0600` hardening of the database and its `-wal`/`-shm` sidecars. |
+| `src/storage.rs` | Versioned SQLite schema, migration, transactional save, `0600` hardening of the database and its `-wal`/`-shm` sidecars. |
+| `src/bookmarks.rs` | Bookmark store: add, remove, list, deduplicated by URL. |
+| `src/history.rs` | History store: finished-load records, collapsed repeats, capped at 5000 rows. |
 | `src/main.rs` | Process entry: arguments, the `--smoke` path, exit codes. |
 | `src/gui.rs` | `AdwApplication`, window, tab strip, `PageState`, the window's `WebContext`, and lazy `WebView` realization. |
 
@@ -50,7 +65,9 @@ sessions, search endpoint) that every tab shares, so per-tab state stays in
    tab's `WebKitNetworkSession` and starts the pending load.
 3. `LoadEvent::Finished` copies the final URI and title into the address entry
    and the tab label.
-4. Closing the window writes the normal tabs to SQLite in one transaction.
+4. A finished load updates the address entry, the tab title, the bookmark star,
+   and (for normal tabs) the history store.
+5. Closing the window writes the normal tabs to SQLite in one transaction.
    Private tabs are filtered out and are never restored. The session is written
    when a tab closes and when the window closes, so a `SIGKILL` or a crash loses
    whatever changed since the last of those.
@@ -97,6 +114,7 @@ Usage: rbrowse [--profile-dir PATH] [--database-path PATH] [--data-dir PATH]
 | `--search-endpoint` | Enables `search:` queries. Without it, search text is rejected instead of being sent anywhere. Must be `https`, except for a loopback host such as a local SearxNG. |
 | `--no-restore` | Ignore stored tabs and start from `--start-url`. |
 | `--smoke` | Head-less contract path: validate the URL, write one session row, read it back, print JSON. |
+| `--storage-check` | Head-less exercise of bookmarks, history, and the schema version, printed as JSON. |
 
 Exit codes: `0` for success and for `--help`/`--version`, `1` for a failed
 startup or smoke check, `2` for a malformed invocation.
@@ -205,9 +223,11 @@ above.
   own: every request goes through the WebKit network process.
 * Wayland is preferred by the native GTK stack, with the GTK X11 fallback.
 
-Deliberately deferred: bookmarks, browsing history, downloads, reader mode,
-passwords (Secret Service is not wired yet), extensions, DRM playback,
-packaging, desktop integration, keyboard shortcuts, and update management.
+Deliberately deferred: downloads, reader mode, passwords (Secret Service is not
+wired yet), extensions, DRM playback, packaging, desktop integration, and update
+management. A visible list of bookmarks and history is also still missing: both
+stores work and are asserted by the contract, but there is no window for them
+yet, only the star toggle.
 WebKitGTK 2.52 exposes only part of the WebExtensions surface, so extension
 work is gated on the API actually present rather than emulated.
 
