@@ -25,7 +25,7 @@
     },
     {
       "dimension": "visual",
-      "reason": "No route-based visual expectations; diagram freshness is checked by `make diagrams-check`."
+      "reason": "No route-based visual expectations for a desktop application. Diagram freshness and desktop-asset validation are covered by `make verify`, which adds diagrams-check and packaging on top of `make gate`."
     }
   ]
 }

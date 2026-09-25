@@ -36,15 +36,19 @@ fn watch_one_download(download: &Download, download_dir: &std::path::Path) {
         let registrar = download.clone();
         let owner = download.clone();
         registrar.connect_decide_destination(move |_, suggested| {
-            match downloads::destination_for(&dir, suggested, |_| false) {
-                Some(path) => {
-                    let path = path.to_string_lossy().into_owned();
-                    owner.set_destination(&path);
+            // Reserve rather than merely check the name, so two downloads of
+            // the same file cannot be handed the same path.
+            match downloads::reserve(&dir, suggested, |_| false) {
+                Ok(path) => {
+                    owner.set_destination(&path.to_string_lossy());
                     true
                 }
                 // Refusing is better than writing outside the profile or
                 // inventing a name the server did not ask for.
-                None => false,
+                Err(reason) => {
+                    eprintln!("refused a download: {reason}");
+                    false
+                }
             }
         });
     }
@@ -85,6 +89,7 @@ impl TabMode {
 /// Resources shared by every tab in one window.
 #[derive(Clone)]
 struct Browser {
+    application: adw::Application,
     context: Rc<WebContext>,
     normal_network: NetworkHandle,
     private_network: NetworkHandle,
@@ -216,9 +221,14 @@ impl Shell {
     /// window opened after a page load shows the current database.
     fn open_library(&self, kind: LibraryKind) {
         let shell = self.clone();
-        library::open(kind, &self.browser.store, move |url| {
-            shell.add_tab(TabMode::Normal, &url);
-        });
+        library::open(
+            kind,
+            &self.browser.store,
+            &self.browser.application,
+            move |url| {
+                shell.add_tab(TabMode::Normal, &url);
+            },
+        );
     }
 
     fn open_bookmarks(&self) {
@@ -425,6 +435,7 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
     // the process pool, the network sessions, and any future per-window
     // settings in one place instead of implicit defaults.
     let browser = Browser {
+        application: application.clone(),
         context: Rc::new(WebContext::new()),
         store: Rc::clone(&store),
         normal_network: Rc::new(NetworkSession::new(
@@ -436,8 +447,11 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         download_dir: config.download_dir().to_path_buf(),
     };
 
+    // A private tab's download must not outlive the session, so it goes to a
+    // temporary directory that is removed when the window closes.
+    let private_download_dir = private_download_dir();
     watch_downloads(&browser.normal_network, browser.download_dir.clone());
-    watch_downloads(&browser.private_network, browser.download_dir.clone());
+    watch_downloads(&browser.private_network, private_download_dir.clone());
 
     let tab_view = adw::TabView::new();
     let tab_bar = adw::TabBar::new();
@@ -560,6 +574,7 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
     let shell_for_window = shell.clone();
     window.connect_close_request(move |_| {
         shell_for_window.save();
+        let _ = std::fs::remove_dir_all(&private_download_dir);
         Propagation::Proceed
     });
 
@@ -612,8 +627,24 @@ fn install_actions(application: &adw::Application, shell: &Shell) {
         let shell = shell.clone();
         action.connect_activate(move |_, _| handler(&shell));
         application.add_action(&action);
-        application.set_accels_for_action(&format!("win.{name}"), keys);
+        // The action lives in the application's own group, so the accelerator
+        // must name that group. Registering "win.<name>" here would silently
+        // match nothing and leave every shortcut dead.
+        debug_assert!(application.has_action(name));
+        application.set_accels_for_action(&format!("app.{name}"), keys);
     }
+}
+
+/// A temporary directory for downloads started in a private tab.
+///
+/// It lives outside the profile, so a private download is never persisted with
+/// the browser's data, and it is removed when the window closes.
+fn private_download_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("rbrowse-private-{}", std::process::id()));
+    // Best effort: if it cannot be created the download handler will refuse the
+    // write rather than fall back to somewhere less private.
+    let _ = std::fs::create_dir_all(&dir);
+    dir
 }
 
 fn data_path(config: &Config) -> Result<&str, String> {
@@ -639,13 +670,14 @@ fn find_state(states: &Rc<RefCell<Vec<PageRef>>>, page: &adw::TabPage) -> Option
 }
 
 /// Re-apply positional tab titles so the strip does not keep gaps after a
-/// close. A tab that already shows a page title keeps it.
+/// close. Only a tab still showing its own positional label is touched, so a
+/// page whose title happens to read "Tab 3" is never overwritten.
 fn renumber_tabs(states: &Rc<RefCell<Vec<PageRef>>>) {
     for (index, state) in states.borrow().iter().enumerate() {
         let number = index + 1;
-        if state.title.borrow().as_str() == TabMode::title(state.mode, number + 1)
-            || state.title.borrow().as_str() == TabMode::title(state.mode, number)
-        {
+        let owns_label = state.title.borrow().as_str() == TabMode::title(state.mode, number)
+            || state.title.borrow().as_str() == TabMode::title(state.mode, number + 1);
+        if owns_label {
             let title = TabMode::title(state.mode, number);
             *state.title.borrow_mut() = title.clone();
             if let Some(page) = state.page.borrow().as_ref() {

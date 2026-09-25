@@ -46,10 +46,15 @@ type Entry = (String, String, String);
 pub fn open(
     kind: LibraryKind,
     store: &Rc<RefCell<storage::SessionStore>>,
+    application: &adw::Application,
     on_open: impl Fn(String) + 'static,
 ) {
     let on_open: Rc<dyn Fn(String)> = Rc::new(on_open);
+    // Registering the window with the application keeps it in
+    // `application.windows()`, so a second Ctrl+Shift+B raises this one instead
+    // of stacking copies, and quitting tears it down.
     let window = adw::Window::builder()
+        .application(application)
         .title(format!("R Browse — {}", kind.title()))
         .default_width(560)
         .default_height(520)

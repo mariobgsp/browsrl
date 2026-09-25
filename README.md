@@ -214,13 +214,19 @@ it cannot drive this shell: WebKitGTK 6.0 requires the app to answer
 release) do not expose that detailed signal. Rather than ship a fragile
 hand-written closure around it, the shell does not use WebDriver.
 
-The window is still verified automatically, through its own actions. They are
-registered on the `GApplication`, which means they are reachable over the
-session bus, so `make e2e-gui` launches the real browser against a loopback
-fixture and asserts what is observable from outside: the schema it creates, the
-bookmark the `Ctrl+D` action writes and then removes, a new tab's page load
-arriving in history, and the process staying alive across a sequence of
-actions. It writes `artifacts/e2e-gui/report.json`.
+The window is still verified automatically, in two ways. Its actions are
+registered on the `GApplication`, which makes them reachable over the session
+bus, and its accelerators are exercised with `wtype`, so real key presses are
+tested rather than assumed. `make e2e-gui` launches the real browser against a
+loopback fixture and asserts what is observable from outside: the schema it
+creates, that `Ctrl+D` writes a bookmark and a second press removes it, that
+`Ctrl+L` followed by typing and `Enter` navigates and reaches history, and that
+a sequence of actions and keys leaves the process alive. It writes
+`artifacts/e2e-gui/report.json`.
+
+Those key checks are mutation-tested: putting the accelerators back on a `win.`
+action group that is never populated, which is a bug this project actually had,
+makes both key checks fail.
 
 What remains unasserted is the visual result: page rendering, the readability
 pass, and the library windows are checked by screenshot rather than by an

@@ -41,7 +41,7 @@ build-release:
 	cargo build --release
 
 run:
-	cargo run --
+	cargo run
 
 # The core (config, navigation, storage, bookmarks, history, downloads) must
 # stay buildable without GTK or WebKit so head-less machines and CI can check
@@ -110,4 +110,5 @@ uninstall:
 	rm -f $(DATADIR)/applications/$(APP_ID).desktop
 	rm -f $(DATADIR)/metainfo/$(APP_ID).metainfo.xml
 	rm -f $(DATADIR)/icons/hicolor/128x128/apps/rbrowse.png
+	@rmdir $(DATADIR)/icons/hicolor/128x128/apps $(DATADIR)/icons/hicolor/128x128 2>/dev/null || true
 	@echo "removed from $(DESTDIR)$(PREFIX)"

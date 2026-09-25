@@ -33,33 +33,68 @@ pub fn safe_leaf_name(suggested: &str) -> Option<String> {
     if name.is_empty() { None } else { Some(name) }
 }
 
-/// Pick a destination inside `directory`, avoiding collisions with `taken`.
+/// Reserve a free destination inside `directory` for a download.
 ///
-/// Returns `None` when the server supplied nothing usable, which the caller
-/// reports as a refused download rather than guessing a name.
-pub fn destination_for(
+/// The name is chosen and *reserved* here rather than merely checked, so two
+/// downloads of the same file name cannot both be handed the same path: the
+/// reservation is an empty file that WebKit then writes over.
+pub fn reserve(
     directory: &Path,
     suggested: &str,
-    taken: impl Fn(&str) -> bool,
-) -> Option<PathBuf> {
-    let leaf = safe_leaf_name(suggested)?;
-    let candidate = directory.join(&leaf);
-    if !taken(leaf.as_str()) && !candidate.exists() {
-        return Some(candidate);
-    }
-    // Keep the extension when adding a counter so the file stays openable.
+    mut is_taken: impl FnMut(&str) -> bool,
+) -> Result<PathBuf, String> {
+    let leaf = safe_leaf_name(suggested).ok_or_else(|| {
+        "the server supplied no usable download name, so the download was refused".to_string()
+    })?;
     let (stem, extension) = split_extension(&leaf);
-    for index in 1..1000 {
-        let numbered = match extension.as_deref() {
-            Some(extension) => format!("{stem} ({index}).{extension}"),
-            None => format!("{stem} ({index})"),
+    for index in 0..1000u32 {
+        let name = if index == 0 {
+            leaf.clone()
+        } else {
+            match extension.as_deref() {
+                Some(extension) => format!("{stem} ({index}).{extension}"),
+                None => format!("{stem} ({index})"),
+            }
         };
-        let candidate = directory.join(&numbered);
-        if !taken(numbered.as_str()) && !candidate.exists() {
-            return Some(candidate);
+        if is_taken(&name) {
+            continue;
+        }
+        let candidate = directory.join(&name);
+        match reserve_file(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "cannot reserve a download file in {}: {error}",
+                    directory.display()
+                ));
+            }
         }
     }
-    None
+    Err("no free download name was found".to_string())
+}
+
+#[cfg(unix)]
+fn reserve_file(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // 0600: a download can be anything, so it is not world readable even
+    // inside the profile.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map(|_| ())
+}
+
+#[cfg(not(unix))]
+fn reserve_file(path: &Path) -> std::io::Result<()> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map(|_| ())
 }
 
 fn split_extension(leaf: &str) -> (String, Option<String>) {

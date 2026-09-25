@@ -98,17 +98,29 @@ fn run_storage_check(config: &Config) -> Result<(), String> {
     let mut names_ok = true;
     let mut observed: Vec<(String, Option<String>)> = Vec::new();
     for (suggested, expected) in cases {
-        let chosen = downloads::destination_for(&download_dir, suggested, taken).and_then(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        });
+        let chosen = downloads::reserve(&download_dir, suggested, taken)
+            .ok()
+            .and_then(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            });
         names_ok &= chosen.as_deref() == expected;
         observed.push((suggested.to_string(), chosen));
     }
-    let escapes = downloads::destination_for(&download_dir, "../../escape.txt", taken)
+    let escapes = downloads::reserve(&download_dir, "../../escape.txt", taken)
+        .ok()
         .and_then(|path| path.parent().map(|parent| parent == download_dir))
         .unwrap_or(false);
     names_ok &= escapes;
+    // Each successful reservation left an empty file; clear them so the check
+    // does not litter the profile.
+    for entry in std::fs::read_dir(&download_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let _ = std::fs::remove_file(entry.path());
+    }
 
     let ok = first_add
         && !second_add
