@@ -9,7 +9,7 @@ export PKG_CONFIG_SYSROOT_DIR := $(WEBKIT_ROOT)
 export LD_LIBRARY_PATH := $(WEBKIT_PREFIX)/lib:$(LD_LIBRARY_PATH)
 endif
 
-.PHONY: doctor build run check-core fmt-check clippy e2e perf diagrams diagrams-check gate verify
+.PHONY: doctor build run check-core fmt-check clippy e2e e2e-gui perf diagrams diagrams-check gate verify
 
 # The machine-checkable subset: everything that needs no renderer and no
 # display. `gate` prints a test count so an automated gate can prove the
@@ -42,6 +42,11 @@ clippy:
 
 e2e: build
 	python3 tests/e2e.py
+
+# Drives the real window through its own GApplication actions over the session
+# bus. Needs a display, so it is not part of `gate`.
+e2e-gui: build
+	python3 tests/gui.py
 
 perf: build
 	python3 tests/perf.py

@@ -1,16 +1,23 @@
 {
   "gate": true,
-  "dimensions": ["unit"],
+  "dimensions": [
+    "unit"
+  ],
   "timeoutMs": 900000,
   "unit": {
     "commands": [
-      { "command": "make", "args": ["gate"] }
+      {
+        "command": "make",
+        "args": [
+          "gate"
+        ]
+      }
     ]
   },
   "waivers": [
     {
       "dimension": "ui",
-      "reason": "GTK4 desktop application with no HTTP surface; the window is verified by the manual procedure in README.md and cannot be driven by WebKitWebDriver in WebKitGTK 6.0."
+      "reason": "GTK4 desktop application with no HTTP surface. Its actions are driven automatically over the session bus by `make e2e-gui`; page rendering is verified by screenshot, and WebKitWebDriver cannot drive this app in WebKitGTK 6.0."
     },
     {
       "dimension": "api",

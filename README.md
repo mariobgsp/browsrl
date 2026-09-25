@@ -163,6 +163,7 @@ make verify   # gate plus the diagram freshness check
 | `make check-core` | The library half compiles without GTK or WebKit. |
 | `make build` | The real binary links. |
 | `make e2e` | The offline contract below, writing `artifacts/e2e/report.json`. |
+| `make e2e-gui` | Launches the real window and drives its actions over the session bus, writing `artifacts/e2e-gui/report.json`. Needs a display. |
 | `make perf` | Five smoke runs, writing `artifacts/perf.json`. |
 | `make diagrams-check` | Every committed SVG/PNG matches a fresh render. |
 | `make gate` | All of the above except the diagram check, plus a printed check count. |
@@ -203,15 +204,26 @@ body rendered by WebKit, and `data/` populated with WebKit's own storage. This
 is how the two-tab and blank-address regressions seen during development were
 found, so it is worth repeating after tab-strip changes.
 
-**Not covered by automation:** the GUI. `WebKitWebDriver` is installed and works
-against WebKit's own MiniBrowser, but it cannot drive this shell yet:
-WebKitGTK 6.0 requires the app to answer
+### GUI verification
+
+`WebKitWebDriver` is installed and works against WebKit's own MiniBrowser, but
+it cannot drive this shell: WebKitGTK 6.0 requires the app to answer
 `WebKitAutomationSession::create-web-view` and return a view created with
 `is-controlled-by-automation`, and the `webkit6` 0.6.1 bindings (the current
 release) do not expose that detailed signal. Rather than ship a fragile
-hand-written closure around it, the slice leaves GUI automation out and says so.
-The profile, storage, navigation, and CLI layers are covered by the contract
-above.
+hand-written closure around it, the shell does not use WebDriver.
+
+The window is still verified automatically, through its own actions. They are
+registered on the `GApplication`, which means they are reachable over the
+session bus, so `make e2e-gui` launches the real browser against a loopback
+fixture and asserts what is observable from outside: the schema it creates, the
+bookmark the `Ctrl+D` action writes and then removes, a new tab's page load
+arriving in history, and the process staying alive across a sequence of
+actions. It writes `artifacts/e2e-gui/report.json`.
+
+What remains unasserted is the visual result: page rendering, the readability
+pass, and the library windows are checked by screenshot rather than by an
+assertion.
 
 ## Privacy and current boundaries
 
