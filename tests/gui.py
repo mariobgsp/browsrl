@@ -220,6 +220,24 @@ def main() -> int:
         try:
             time.sleep(3)
             tables = read_database(profile / "session.sqlite")["tables"]
+            # The whole action surface at once: a missing registration is a
+            # silent way to ship a dead button or a dead shortcut.
+            expected_actions = {
+                "new-tab", "new-private-tab", "close-tab", "next-tab",
+                "previous-tab", "reload", "bookmark", "bookmarks", "history",
+                "focus-address", "copy-page-address", "readability",
+                "zoom-in", "zoom-out", "zoom-reset", "print", "restore-closed",
+            }
+            registered = set(action_names())
+            check(
+                "every_expected_action_is_registered",
+                expected_actions <= registered,
+                {
+                    "missing": sorted(expected_actions - registered),
+                    "registered": sorted(registered),
+                },
+            )
+
             check(
                 "window_starts_and_creates_schema",
                 browser.alive()

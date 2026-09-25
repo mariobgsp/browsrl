@@ -29,7 +29,7 @@ ASSETS := assets
 GATE := fmt-check clippy check-core build e2e
 
 .PHONY: doctor build build-release run check-core fmt-check clippy e2e e2e-gui perf \
-        diagrams diagrams-check check-desktop packaging gate verify \
+        diagrams diagrams-check check-desktop packaging gate verify dist \
         install uninstall
 
 doctor:
@@ -102,6 +102,22 @@ gate:
 	@printf 'gate: %s passed\n' '$(words $(GATE))'
 
 verify: $(GATE) packaging diagrams-check
+
+# A source archive, for handing the project to a machine without git. Built
+# from the same inputs the gate checks, and it refuses to include a stale
+# diagram or an unverified desktop entry by depending on the same targets.
+DIST_NAME := rbrowse-$(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+DIST_DIR := dist/$(DIST_NAME)
+
+dist: verify build-release
+	@rm -rf $(DIST_DIR)
+	@mkdir -p $(DIST_DIR)
+	@cp Cargo.toml Cargo.lock rust-toolchain.toml Makefile README.md .gitignore $(DIST_DIR)
+	@cp -r src tests scripts diagrams assets $(DIST_DIR)
+	@cp -r .pi/verify.json $(DIST_DIR)/verify.json
+	@tar -czf dist/$(DIST_NAME).tar.gz -C dist $(DIST_NAME)
+	@rm -rf $(DIST_DIR)
+	@printf 'built %s\n' "dist/$(DIST_NAME).tar.gz"
 
 install: build-release
 	install -Dm755 target/release/rbrowse $(BINDIR)/rbrowse

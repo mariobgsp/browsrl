@@ -5,5 +5,6 @@ __pycache__/
 !.pi/verify.json
 artifacts/perf.json
 artifacts/e2e-gui/
+/dist/
 *.swp
 .DS_Store

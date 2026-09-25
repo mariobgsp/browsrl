@@ -22,9 +22,12 @@ missing is listed as deferred below rather than stubbed out.
 | History | Written when WebKit reports a finished load, repeat visits collapsed, pruned to 5000 rows |
 | Downloads | Saved into `profile/downloads`, server-supplied names reduced to a safe leaf, collisions numbered |
 | Readability | Per-tab pass that constrains measure, enlarges type and hides page chrome, applied as a user style sheet with no script injected |
+| Zoom | Per-tab, 50% to 300%, with the level shown in the toolbar |
+| Print | `Ctrl+P` opens the WebKit print dialog for the selected tab |
+| Closed tabs | `Ctrl+Shift+T` reopens the last closed tab, sixteen deep |
 | Library | Bookmark and history windows from the toolbar actions, with history clearing |
 | Session | Tabs restored on launch, saved on tab close and window close |
-| Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+Shift+B` `Ctrl+H` `Ctrl+Shift+R` `Ctrl+C` |
+| Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Shift+T` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+Shift+B` `Ctrl+H` `Ctrl+Shift+R` `Ctrl++` `Ctrl+-` `Ctrl+0` `Ctrl+P` `Ctrl+C` |
 | Profile | One local directory, `0700`/`0600`, SQLite schema with in-place migration |
 
 ## Architecture
@@ -257,14 +260,27 @@ Deliberately not implemented:
 | DRM playback | No Widevine or equivalent in WebKitGTK; nothing to wire up |
 | Update management | A browser with an updater is a browser with a remote channel; this one has none by design |
 | Reader-mode extraction | The readability pass restyles a page; it does not extract an article the way a reader engine would |
-| Find in page, print, save page, zoom controls | Not implemented |
+| Find in page | `webkit_web_view_find_*` does not exist in WebKitGTK 6.0; there is no typed binding to call |
+| Save page | Needs the same removed find/serialisation surface, or an injected script that the 6.0 bindings also lack |
 | Tab reordering by drag, tear-off windows, closed-tab restore | Not implemented |
 | Content blocking | Not implemented |
 | Site permissions and prompts | WebKit handles the defaults; there is no per-site UI |
-| Archive packaging | `make install` covers local installation, not submission to a distribution |
+| Archive packaging | `make dist` builds a source tarball, but nothing is submitted to a distribution |
 
 This is a working browser shell, not a finished product, and it is not a
 functional superset of the macOS browser it is inspired by.
+
+## Distributing
+
+`make dist` builds `dist/rbrowse-<version>.tar.gz` after the gate, the packaging
+checks and the diagram freshness check have all passed, so an archive can never
+carry a stale diagram or an unvalidated desktop entry. It is a source tarball
+with no `.git`, and it builds on its own:
+
+```sh
+make dist
+tar xzf dist/rbrowse-0.1.0.tar.gz -C /tmp && cd /tmp/rbrowse-0.1.0 && cargo build
+```
 
 ## Installing
 

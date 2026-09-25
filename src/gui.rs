@@ -2,6 +2,7 @@
 
 use crate::library::{self, LibraryKind};
 use gtk4 as gtk;
+use gtk4::glib;
 use gtk4::glib::Propagation;
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -90,6 +91,8 @@ impl TabMode {
 #[derive(Clone)]
 struct Browser {
     application: adw::Application,
+    /// Weak so the application-level actions cannot keep a closed window alive.
+    window: glib::WeakRef<adw::ApplicationWindow>,
     context: Rc<WebContext>,
     normal_network: NetworkHandle,
     private_network: NetworkHandle,
@@ -116,6 +119,10 @@ struct PageState {
     readable: gtk::Button,
     /// Whether this tab is showing the readability stylesheet.
     readable_on: Cell<bool>,
+    /// Per-tab zoom level, kept here so switching tabs restores it.
+    zoom: Cell<f64>,
+    /// Label showing the zoom percentage, kept in step with `zoom`.
+    zoom_label: gtk::Label,
     /// Per-tab content manager; the sheet is added to and removed from it.
     readable_manager: webkit6::UserContentManager,
     readable_sheet: RefCell<Option<webkit6::UserStyleSheet>>,
@@ -136,7 +143,12 @@ struct Shell {
     tab_view: adw::TabView,
     store: Rc<RefCell<storage::SessionStore>>,
     browser: Browser,
+    /// Recently closed normal tabs, newest last.
+    closed: Rc<RefCell<std::collections::VecDeque<(String, String)>>>,
 }
+
+/// How many closed tabs can be reopened.
+const CLOSED_TAB_MEMORY: usize = 16;
 
 /// One keyboard action: its name, its accelerators, and what it does.
 type ActionBinding = (&'static str, &'static [&'static str], fn(&Shell));
@@ -229,6 +241,67 @@ impl Shell {
                 shell.add_tab(TabMode::Normal, &url);
             },
         );
+    }
+
+    /// Change the selected tab's zoom, clamped to a usable range.
+    fn zoom_by(&self, steps: f64) {
+        let Some(state) = self.selected() else {
+            return;
+        };
+        set_zoom(&state, state.zoom.get() + steps);
+    }
+
+    fn reset_zoom(&self) {
+        let Some(state) = self.selected() else {
+            return;
+        };
+        set_zoom(&state, 1.0);
+    }
+
+    /// Open the print dialog for the selected tab, parented to the window.
+    fn print(&self) {
+        let Some(state) = self.selected() else {
+            return;
+        };
+        let Some(view) = state.view.borrow().clone() else {
+            self.note(&state, "This tab has nothing to print yet");
+            return;
+        };
+        let operation = webkit6::PrintOperation::new(&view);
+        let parent = self.browser.window.upgrade();
+        operation.run_dialog(parent.as_ref());
+    }
+
+    /// Reopen the most recently closed normal tab.
+    fn restore_closed(&self) {
+        let Some((url, title)) = self.closed.borrow_mut().pop_back() else {
+            return;
+        };
+        let number = self.states.borrow().len() + 1;
+        let (page, state) = create_page(
+            &self.tab_view,
+            &self.browser,
+            url,
+            TabMode::Normal,
+            number,
+            Some(title),
+        );
+        self.states.borrow_mut().push(state.clone());
+        self.tab_view.set_selected_page(&page);
+        realize_page(&state);
+    }
+
+    fn remember_closed(&self, url: String, title: String) {
+        // A small ring buffer: enough to undo a few mistakes, bounded so a long
+        // session cannot grow it without limit.
+        if url == "about:blank" {
+            return;
+        }
+        let mut closed = self.closed.borrow_mut();
+        closed.push_back((url, title));
+        while closed.len() > CLOSED_TAB_MEMORY {
+            closed.pop_front();
+        }
     }
 
     fn open_bookmarks(&self) {
@@ -365,6 +438,28 @@ fn set_readability_icon(state: &PageRef, on: bool) {
     }));
 }
 
+/// Wire the zoom buttons to the tab they belong to, so a shortcut and a click
+/// take exactly the same path.
+fn connect_zoom_buttons(
+    state: &PageRef,
+    out: &gtk::Button,
+    into: &gtk::Button,
+    label: &gtk::Label,
+) {
+    for (button, steps) in [(out, -ZOOM_STEP), (into, ZOOM_STEP)] {
+        let weak: Weak<PageState> = Rc::downgrade(state);
+        button.connect_clicked(move |_| {
+            let Some(state) = weak.upgrade() else {
+                return;
+            };
+            set_zoom(&state, state.zoom.get() + steps);
+        });
+    }
+    // The percentage is a label, not a button: Ctrl+0 is the way back to 100%,
+    // and the label keeps the current level visible at all times.
+    label.set_sensitive(false);
+}
+
 fn connect_readability_button(state: &PageRef, button: &gtk::Button) {
     let weak: Weak<PageState> = Rc::downgrade(state);
     button.connect_clicked(move |_| {
@@ -431,28 +526,6 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
     } else {
         Vec::new()
     };
-    // One explicit WebKit context for the whole window. Owning it here keeps
-    // the process pool, the network sessions, and any future per-window
-    // settings in one place instead of implicit defaults.
-    let browser = Browser {
-        application: application.clone(),
-        context: Rc::new(WebContext::new()),
-        store: Rc::clone(&store),
-        normal_network: Rc::new(NetworkSession::new(
-            Some(data_path(&config)?),
-            Some(cache_path(&config)?),
-        )),
-        private_network: Rc::new(NetworkSession::new_ephemeral()),
-        search_endpoint: config.search_endpoint.clone(),
-        download_dir: config.download_dir().to_path_buf(),
-    };
-
-    // A private tab's download must not outlive the session, so it goes to a
-    // temporary directory that is removed when the window closes.
-    let private_download_dir = private_download_dir();
-    watch_downloads(&browser.normal_network, browser.download_dir.clone());
-    watch_downloads(&browser.private_network, private_download_dir.clone());
-
     let tab_view = adw::TabView::new();
     let tab_bar = adw::TabBar::new();
     tab_bar.set_view(Some(&tab_view));
@@ -479,6 +552,34 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         .default_height(760)
         .content(&root)
         .build();
+
+    // A weak handle, so the application-level actions can parent a dialog to
+    // the window without keeping it alive after it closes.
+    let window_ref: glib::WeakRef<adw::ApplicationWindow> = glib::WeakRef::new();
+    window_ref.set(Some(&window));
+
+    // One explicit WebKit context for the whole window. Owning it here keeps
+    // the process pool, the network sessions, and any future per-window
+    // settings in one place instead of implicit defaults.
+    let browser = Browser {
+        application: application.clone(),
+        window: window_ref,
+        context: Rc::new(WebContext::new()),
+        store: Rc::clone(&store),
+        normal_network: Rc::new(NetworkSession::new(
+            Some(data_path(&config)?),
+            Some(cache_path(&config)?),
+        )),
+        private_network: Rc::new(NetworkSession::new_ephemeral()),
+        search_endpoint: config.search_endpoint.clone(),
+        download_dir: config.download_dir().to_path_buf(),
+    };
+
+    // A private tab's download must not outlive the session, so it goes to a
+    // temporary directory that is removed when the window closes.
+    let private_download_dir = private_download_dir();
+    watch_downloads(&browser.normal_network, browser.download_dir.clone());
+    watch_downloads(&browser.private_network, private_download_dir.clone());
 
     let states: Rc<RefCell<Vec<PageRef>>> = Rc::new(RefCell::new(Vec::new()));
     let mut selected_page = None;
@@ -518,6 +619,7 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         tab_view: tab_view.clone(),
         store: Rc::clone(&store),
         browser: browser.clone(),
+        closed: Rc::new(RefCell::new(std::collections::VecDeque::new())),
     };
 
     // Tab selection realizes the page and syncs its bookmark indicator.
@@ -564,6 +666,10 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
             shell_for_close.save();
             return Propagation::Stop;
         }
+        if let Some(state) = shell_for_close.states.borrow().get(position).cloned() {
+            let title = state.title.borrow().clone();
+            shell_for_close.remember_closed(current_state_url(&state), title);
+        }
         shell_for_close.states.borrow_mut().remove(position);
         // Renumber so the strip stays dense ("Tab 1", "Tab 2") after a close.
         renumber_tabs(&shell_for_close.states);
@@ -587,6 +693,22 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
 ///
 /// These are `GAction`s on the application rather than key-press handlers, so
 /// GTK owns the accelerator table and the bindings work wherever focus is.
+/// Zoom is clamped to a range a person can actually read, and the label shows
+/// the percentage so the state is never a mystery.
+const ZOOM_STEP: f64 = 0.1;
+const ZOOM_MIN: f64 = 0.5;
+const ZOOM_MAX: f64 = 3.0;
+
+fn set_zoom(state: &PageRef, level: f64) {
+    let level = level.clamp(ZOOM_MIN, ZOOM_MAX);
+    state.zoom.set(level);
+    let percent = (level * 100.0).round() as i64;
+    state.zoom_label.set_text(&format!("{percent}%"));
+    if let Some(view) = state.view.borrow().clone() {
+        view.set_zoom_level(level);
+    }
+}
+
 fn install_actions(application: &adw::Application, shell: &Shell) {
     // The closures live as long as the application, so they hold their own
     // handle rather than borrowing the caller's.
@@ -612,6 +734,21 @@ fn install_actions(application: &adw::Application, shell: &Shell) {
         ("reload", &["<Primary>r", "F5"], Shell::reload_selected),
         ("bookmark", &["<Primary>d"], Shell::toggle_bookmark),
         ("bookmarks", &["<Primary><Shift>b"], Shell::open_bookmarks),
+        (
+            "zoom-in",
+            &["<Primary>plus", "<Primary>equal", "F5"],
+            |shell| shell.zoom_by(ZOOM_STEP),
+        ),
+        ("zoom-out", &["<Primary>minus"], |shell| {
+            shell.zoom_by(-ZOOM_STEP)
+        }),
+        ("zoom-reset", &["<Primary>0"], Shell::reset_zoom),
+        ("print", &["<Primary>p"], Shell::print),
+        (
+            "restore-closed",
+            &["<Primary><Shift>t"],
+            Shell::restore_closed,
+        ),
         ("history", &["<Primary>h"], Shell::open_history),
         (
             "readability",
@@ -710,6 +847,14 @@ fn create_page(
     forward.set_tooltip_text(Some("Forward"));
     let reload = gtk::Button::with_label("Reload");
     reload.set_tooltip_text(Some("Reload"));
+    let zoom_out = gtk::Button::from_icon_name("zoom-out-symbolic");
+    zoom_out.set_tooltip_text(Some("Zoom out (Ctrl+-)"));
+    let zoom_label = gtk::Label::new(Some("100%"));
+    zoom_label.set_width_chars(5);
+    zoom_label.set_xalign(0.5);
+    zoom_label.set_tooltip_text(Some("Reset zoom (Ctrl+0)"));
+    let zoom_in = gtk::Button::from_icon_name("zoom-in-symbolic");
+    zoom_in.set_tooltip_text(Some("Zoom in (Ctrl++)"));
     let bookmark = gtk::Button::from_icon_name("non-starred-symbolic");
     let readable = gtk::Button::from_icon_name("view-reading-mode-symbolic");
     let address = gtk::Entry::new();
@@ -721,6 +866,9 @@ fn create_page(
         toolbar.append(button);
     }
     toolbar.append(&address);
+    toolbar.append(&zoom_out);
+    toolbar.append(&zoom_label);
+    toolbar.append(&zoom_in);
     toolbar.append(&bookmark);
     toolbar.append(&readable);
     content.append(&toolbar);
@@ -761,6 +909,8 @@ fn create_page(
         },
         context: browser.context.clone(),
         view: RefCell::new(None),
+        zoom: Cell::new(1.0),
+        zoom_label: zoom_label.clone(),
         bookmark: bookmark.clone(),
         readable: readable.clone(),
         readable_on: Cell::new(false),
@@ -775,6 +925,7 @@ fn create_page(
     connect_reload(&state, &reload);
     connect_bookmark_button(&state, &browser.store, &bookmark);
     connect_readability_button(&state, &readable);
+    connect_zoom_buttons(&state, &zoom_out, &zoom_in, &zoom_label);
     set_bookmark_icon(&state, false);
     set_readability_icon(&state, false);
 
