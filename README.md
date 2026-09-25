@@ -22,8 +22,9 @@ missing is listed as deferred below rather than stubbed out.
 | History | Written when WebKit reports a finished load, repeat visits collapsed, pruned to 5000 rows |
 | Downloads | Saved into `profile/downloads`, server-supplied names reduced to a safe leaf, collisions numbered |
 | Readability | Per-tab pass that constrains measure, enlarges type and hides page chrome, applied as a user style sheet with no script injected |
+| Library | Bookmark and history windows from the toolbar actions, with history clearing |
 | Session | Tabs restored on launch, saved on tab close and window close |
-| Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+Shift+R` `Ctrl+C` |
+| Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+Shift+B` `Ctrl+H` `Ctrl+Shift+R` `Ctrl+C` |
 | Profile | One local directory, `0700`/`0600`, SQLite schema with in-place migration |
 
 ## Architecture

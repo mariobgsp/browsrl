@@ -6,6 +6,8 @@ use serde_json::json;
 
 #[cfg(feature = "webkit")]
 mod gui;
+#[cfg(feature = "webkit")]
+mod library;
 
 fn main() {
     let config = match Config::from_args() {

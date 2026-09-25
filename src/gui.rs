@@ -1,5 +1,6 @@
 //! GTK4/libadwaita/WebKitGTK shell: window, tab strip, and lazy page realization.
 
+use crate::library::{self, LibraryKind};
 use gtk4 as gtk;
 use gtk4::glib::Propagation;
 use gtk4::prelude::*;
@@ -207,6 +208,25 @@ impl Shell {
 
     fn save(&self) {
         save_sessions(&self.states, &self.tab_view, &self.store);
+    }
+
+    /// Open the bookmark or history window.
+    ///
+    /// The lists are read on demand rather than mirrored in the shell, so a
+    /// window opened after a page load shows the current database.
+    fn open_library(&self, kind: LibraryKind) {
+        let shell = self.clone();
+        library::open(kind, &self.browser.store, move |url| {
+            shell.add_tab(TabMode::Normal, &url);
+        });
+    }
+
+    fn open_bookmarks(&self) {
+        self.open_library(LibraryKind::Bookmarks);
+    }
+
+    fn open_history(&self) {
+        self.open_library(LibraryKind::History);
     }
 
     fn reload_selected(&self) {
@@ -576,6 +596,8 @@ fn install_actions(application: &adw::Application, shell: &Shell) {
         ),
         ("reload", &["<Primary>r", "F5"], Shell::reload_selected),
         ("bookmark", &["<Primary>d"], Shell::toggle_bookmark),
+        ("bookmarks", &["<Primary><Shift>b"], Shell::open_bookmarks),
+        ("history", &["<Primary>h"], Shell::open_history),
         (
             "readability",
             &["<Primary><Shift>r"],
