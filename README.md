@@ -26,8 +26,12 @@ missing is listed as deferred below rather than stubbed out.
 | Print | `Ctrl+P` opens the WebKit print dialog for the selected tab |
 | Closed tabs | `Ctrl+Shift+T` reopens the last closed tab, sixteen deep |
 | Library | Bookmark and history windows from the toolbar actions, with history clearing |
+| Site permissions | Every capability request is refused until it is answered: an `AdwAlertDialog` defaults to Deny, and dismissing it denies |
+| Clear browsing data | `Ctrl+Shift+Delete` empties the history table and clears WebKit's cookies, storage and caches for the profile's session |
+| Load failures | A failed load names the URL and the error in the status line instead of leaving a blank page |
+| Crashed pages | A web process that dies is reported with the reason and a reload hint |
 | Session | Tabs restored on launch, saved on tab close and window close |
-| Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Shift+T` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+Shift+B` `Ctrl+H` `Ctrl+Shift+R` `Ctrl++` `Ctrl+-` `Ctrl+0` `Ctrl+P` `Ctrl+C` |
+| Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Shift+T` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+Shift+B` `Ctrl+H` `Ctrl+Shift+R` `Ctrl++` `Ctrl+-` `Ctrl+0` `Ctrl+P` `Ctrl+C` `Ctrl+Shift+Delete` |
 | Profile | One local directory, `0700`/`0600`, SQLite schema with in-place migration |
 
 ## Architecture
@@ -222,10 +226,30 @@ registered on the `GApplication`, which makes them reachable over the session
 bus, and its accelerators are exercised with `wtype`, so real key presses are
 tested rather than assumed. `make e2e-gui` launches the real browser against a
 loopback fixture and asserts what is observable from outside: the schema it
-creates, that `Ctrl+D` writes a bookmark and a second press removes it, that
-`Ctrl+L` followed by typing and `Enter` navigates and reaches history, and that
-a sequence of actions and keys leaves the process alive. It writes
+creates, that the first page reaches history, that `Ctrl+D` writes a bookmark and
+a second press removes it, that `Ctrl+L` followed by typing and `Enter` navigates
+and reaches history, that clearing browsing data empties the history table, and
+that a sequence of actions and keys leaves the process alive. It writes
 `artifacts/e2e-gui/report.json`.
+
+That run needs the keyboard, so it takes focus: run it when you are not typing.
+It only ever retires its *own* leftovers. A process is signalled only if it is
+this test binary, was given a `--profile-dir` that is a direct child of the
+system temporary directory, and that directory carries the same prefix the
+harness creates profiles from. A browser you started yourself lives in your data
+directory, so it cannot match. The rule is a pure function, and the offline
+contract checks it against nine command lines, including a personal profile, a
+prefix buried in a nested path, and a path that tries to climb out of the
+temporary directory with `..`.
+
+Two things that key checks are up against, both real on a compositor: a mapped
+window does not hold the keyboard the instant it appears, and `wtype` can fail
+while the session is busy. So the contract waits for the app's own readiness
+signal (the first page landing in history) rather than a fixed sleep, retries a
+press until the state it should change has changed, and retries a failed
+delivery. None of that can hide a dead accelerator: an unbound key leaves the
+profile untouched, so every attempt fails and the check fails. A delivery that
+cannot happen at all is recorded as a failure in its own right.
 
 Those key checks are mutation-tested: putting the accelerators back on a `win.`
 action group that is never populated, which is a bug this project actually had,
@@ -234,6 +258,15 @@ makes both key checks fail.
 What remains unasserted is the visual result: page rendering, the readability
 pass, and the library windows are checked by screenshot rather than by an
 assertion.
+
+Three of the newer behaviours are covered differently, and it is worth being
+precise about which is which. Clearing browsing data is asserted: the contract
+activates the action and reads the history table before and after. The
+capability dialog and the two status messages (a failed load, a dead web
+process) compile and pass `clippy`, but they are not yet asserted by the
+contract, because provoking a camera request or a renderer crash from a fixture
+page is not something this harness can do reliably. They are exercised by hand
+with a page that asks for a camera, and with an address that cannot resolve.
 
 ## Privacy and current boundaries
 
@@ -249,6 +282,9 @@ assertion.
 * There is no telemetry, account, sync, remote history, or update client in this
   slice, and no code path that would add one. The shell opens no sockets of its
   own: every request goes through the WebKit network process.
+* A capability request — camera, microphone, screen, location — is refused until
+  it is answered. The dialog opens on Deny, closing it denies, and the answer is
+  not remembered, so a site has to ask again.
 * Wayland is preferred by the native GTK stack, with the GTK X11 fallback.
 
 Deliberately not implemented:
@@ -264,7 +300,8 @@ Deliberately not implemented:
 | Save page | Needs the same removed find/serialisation surface, or an injected script that the 6.0 bindings also lack |
 | Tab reordering by drag, tear-off windows, closed-tab restore | Not implemented |
 | Content blocking | Not implemented |
-| Site permissions and prompts | WebKit handles the defaults; there is no per-site UI |
+| Per-site permission memory | A capability request is asked about every time and refused by default, but the answer is not remembered per site: there is no allow or deny list to store, and `PermissionRequest` exposes no URI to key one on |
+| Engine-side navigation policy | The address bar refuses anything outside `http`, `https` and `about:blank`, but a page's *own* navigation cannot be held to the same rule: `WebKitWebView::decide-policy` in WebKitGTK 6.0 carries only a `PolicyDecision` and a decision type, with no `NavigationAction` and therefore no URI to judge, and the only signal carrying a `NavigationAction` is `create` for new windows. WebKit's own restrictions still apply to what a page may load |
 | Archive packaging | `make dist` builds a source tarball, but nothing is submitted to a distribution |
 
 This is a working browser shell, not a finished product, and it is not a

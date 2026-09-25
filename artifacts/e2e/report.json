@@ -183,6 +183,44 @@
       },
       "name": "command_line_exit_codes",
       "passed": true
+    },
+    {
+      "details": {
+        "expected": {
+          "another_browser": false,
+          "flag_without_value": false,
+          "no_profile_argument": false,
+          "own_test_profile": true,
+          "personal_data_dir": false,
+          "prefix_nested_deeper": false,
+          "prefixed_name_outside_temp": false,
+          "temp_dir_itself": false,
+          "traversal_out_of_temp": false
+        },
+        "profile_prefix": "rbrowse-e2e-",
+        "verdicts": {
+          "another_browser": false,
+          "flag_without_value": false,
+          "no_profile_argument": false,
+          "own_test_profile": true,
+          "personal_data_dir": false,
+          "prefix_nested_deeper": false,
+          "prefixed_name_outside_temp": false,
+          "temp_dir_itself": false,
+          "traversal_out_of_temp": false
+        }
+      },
+      "name": "gui_cleanup_matches_only_its_own_browsers",
+      "passed": true
+    },
+    {
+      "details": {
+        "failing_command_message": "/bin/false: exit 1",
+        "failing_command_raises": true,
+        "succeeding_command_returns": true
+      },
+      "name": "unreliable_key_input_is_reported",
+      "passed": true
     }
   ],
   "network": "loopback fixtures only",
