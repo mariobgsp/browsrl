@@ -18,6 +18,7 @@ pub struct SessionTab {
     pub selected: bool,
 }
 
+#[derive(Debug)]
 pub struct SessionStore {
     connection: Connection,
 }
@@ -80,8 +81,14 @@ impl SessionStore {
         for record in &records {
             validate_record(record)?;
         }
-        if !records.is_empty() && !records.iter().any(|record| record.selected) {
-            records[0].selected = true;
+        // A session always has a selected tab, so fall back to the first one
+        // rather than indexing (which could panic on an empty slice).
+        let has_selection = records.iter().any(|record| record.selected);
+        if let (false, Some(first)) = (
+            has_selection,
+            records.iter_mut().find(|record| !record.selected),
+        ) {
+            first.selected = true;
         }
 
         let transaction = self

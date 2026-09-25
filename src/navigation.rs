@@ -60,9 +60,13 @@ pub fn validate_explicit_url(value: &str) -> Result<String, String> {
     Ok(url.to_string())
 }
 
-pub fn search_url(query: &str) -> String {
+/// Build a query URL against the built-in default endpoint.
+///
+/// The endpoint is a constant, so this cannot fail in practice; it still
+/// returns a `Result` instead of panicking, because a panic raised inside a
+/// signal handler aborts the process rather than unwinding.
+pub fn search_url(query: &str) -> Result<String, String> {
     search_url_with_endpoint(query, DEFAULT_SEARCH_ENDPOINT)
-        .expect("the default search endpoint is valid")
 }
 
 pub fn search_url_with_endpoint(query: &str, endpoint: &str) -> Result<String, String> {

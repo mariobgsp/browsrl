@@ -18,3 +18,19 @@ webkit6 = { version = "0.6.1", features = ["v2_52"], optional = true }
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 serde_json = "1.0.151"
 url = "2.5.7"
+
+# Crash guards. A panic raised inside a GObject signal trampoline aborts the
+# process, and a hand-written `extern "C"` closure is how this project's shell
+# segfaulted repeatedly while probing WebDriver. Both are denied at compile
+# time so a future change cannot reintroduce them by accident.
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+todo = "deny"
+unimplemented = "deny"
