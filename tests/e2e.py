@@ -14,9 +14,11 @@ import os
 import pathlib
 import stat
 import sys
+import tempfile
 
 from harness import (
     BINARY,
+    PROFILE_PREFIX,
     LocalFixtureServer,
     ROOT,
     read_database,
@@ -289,6 +291,90 @@ def main() -> int:
             "unknown_code": unknown_result.returncode,
             "missing_value_code": missing_value.returncode,
         },
+    )
+
+    # The GUI harness retires leftover browser processes between runs. That
+    # cleanup is the one place a test could reach a browser the person started,
+    # so its rule is checked here, offline, where a mistake is cheap to make and
+    # easy to see.
+    import gui  # imported here: the module needs no display, only its rule
+
+    temp = pathlib.Path(tempfile.gettempdir())
+    home = pathlib.Path.home()
+    guard_cases = {
+        "own_test_profile": [str(BINARY), "--profile-dir", str(temp / f"{PROFILE_PREFIX}abc")],
+        "personal_data_dir": [str(BINARY), "--profile-dir", str(home / ".local/share/rbrowse")],
+        "prefix_nested_deeper": [
+            str(BINARY),
+            "--profile-dir",
+            str(temp / "keep" / f"{PROFILE_PREFIX}mine"),
+        ],
+        "prefixed_name_outside_temp": [
+            str(BINARY),
+            "--profile-dir",
+            str(home / f"{PROFILE_PREFIX}saved"),
+        ],
+        "traversal_out_of_temp": [
+            str(BINARY),
+            "--profile-dir",
+            str(temp / f"{PROFILE_PREFIX}a" / ".." / ".." / f"{PROFILE_PREFIX}b"),
+        ],
+        "another_browser": [
+            "/usr/bin/firefox",
+            "--profile-dir",
+            str(temp / f"{PROFILE_PREFIX}abc"),
+        ],
+        "no_profile_argument": [str(BINARY), "--start-url", "http://127.0.0.1/"],
+        "flag_without_value": [str(BINARY), "--profile-dir"],
+        "temp_dir_itself": [str(BINARY), "--profile-dir", str(temp)],
+    }
+    expected = {
+        "own_test_profile": True,
+        "personal_data_dir": False,
+        "prefix_nested_deeper": False,
+        "prefixed_name_outside_temp": False,
+        "traversal_out_of_temp": False,
+        "another_browser": False,
+        "no_profile_argument": False,
+        "flag_without_value": False,
+        "temp_dir_itself": False,
+    }
+    verdicts = {
+        name: gui.looks_like_harness_browser(argv) for name, argv in guard_cases.items()
+    }
+    record(
+        checks,
+        "gui_cleanup_matches_only_its_own_browsers",
+        verdicts == expected,
+        {"verdicts": verdicts, "expected": expected, "profile_prefix": PROFILE_PREFIX},
+    )
+
+    # A key press that cannot be delivered has to be an error, never a silent
+    # pass. Probed with harmless commands rather than wtype, so no input is
+    # injected into the session while the check runs.
+    def raises_wtype_failed(command: list[str]) -> bool:
+        try:
+            gui.run_wtype(command, attempts=2)
+        except gui.WtypeFailed:
+            return True
+        return False
+
+    delivery = {
+        "failing_command_raises": raises_wtype_failed(["/bin/false"]),
+        "failing_command_message": None,
+        "succeeding_command_returns": gui.run_wtype(["/bin/true"], attempts=1) is None,
+    }
+    try:
+        gui.run_wtype(["/bin/false"], attempts=1)
+    except gui.WtypeFailed as error:
+        delivery["failing_command_message"] = str(error)
+    record(
+        checks,
+        "unreliable_key_input_is_reported",
+        delivery["failing_command_raises"]
+        and bool(delivery["failing_command_message"])
+        and delivery["succeeding_command_returns"],
+        delivery,
     )
 
     passed = all(bool(check["passed"]) for check in checks)

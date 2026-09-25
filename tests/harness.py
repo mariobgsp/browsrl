@@ -152,5 +152,11 @@ def read_database(path: pathlib.Path) -> dict[str, Any]:
         connection.close()
 
 
+# Every profile this harness makes is a fresh directory directly under the
+# system temporary directory with this prefix. Cleanup keys off the same
+# constant, so a guard can never drift away from whatever created the profile.
+PROFILE_PREFIX = "rbrowse-e2e-"
+
+
 def temporary_profile() -> tempfile.TemporaryDirectory[str]:
-    return tempfile.TemporaryDirectory(prefix="rbrowse-e2e-")
+    return tempfile.TemporaryDirectory(prefix=PROFILE_PREFIX)

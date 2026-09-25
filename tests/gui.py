@@ -28,7 +28,14 @@ import sys
 import tempfile
 import time
 
-from harness import BINARY, LocalFixtureServer, ROOT, read_database, temporary_profile
+from harness import (
+    BINARY,
+    PROFILE_PREFIX,
+    LocalFixtureServer,
+    ROOT,
+    read_database,
+    temporary_profile,
+)
 
 
 REPORT = ROOT / "artifacts" / "e2e-gui" / "report.json"
@@ -36,31 +43,97 @@ APPLICATION_ID = "io.github.rbrowse.RBrowse"
 OBJECT_PATH = "/io/github/rbrowse/RBrowse"
 READY_SECONDS = 30
 
-# Only leftovers from this harness are cleared: they are recognisable by their
-# temporary profile directory. A browser the person started is left alone.
-LEFTOVER_MARKER = "rbrowse-gui-"
+# Names this harness's own log files, so they can be recognised and removed
+# without touching anything else in the temporary directory.
+LOG_PREFIX = "rbrowse-gui-"
 
 
 def have_wtype() -> bool:
     return shutil.which("wtype") is not None
 
 
+def looks_like_harness_browser(args: list[str]) -> bool:
+    """Classify a command line: is it a browser this harness started?
+
+    Kept separate from reading ``/proc`` so the rule can be checked against
+    realistic command lines, including the ones that must be rejected.
+    """
+    if str(BINARY) not in args or "--profile-dir" not in args:
+        return False
+    index = args.index("--profile-dir") + 1
+    if index >= len(args):
+        return False
+    profile = pathlib.Path(args[index])
+    return (
+        profile.name.startswith(PROFILE_PREFIX)
+        and profile.parent == pathlib.Path(tempfile.gettempdir())
+    )
+
+
+def is_own_leftover(pid: str) -> bool:
+    """True only for a browser this harness started on an earlier run.
+
+    A browser the person started is never matched, because all of these have to
+    hold at once:
+
+    * the process is this test binary,
+    * it was given a ``--profile-dir`` that is a direct child of the system
+      temporary directory, and
+    * that directory's name carries :data:`PROFILE_PREFIX`, the same constant
+      :func:`temporary_profile` creates names from.
+
+    A person's own profile lives in their data directory, so the last condition
+    alone rules it out. The prefix is not a search pattern: it is compared
+    against one parsed argument, so a path merely *containing* the text
+    somewhere cannot match either.
+    """
+    if not pid.isdigit() or int(pid) == os.getpid():
+        return False
+    try:
+        raw = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().decode(
+            "utf-8", errors="replace"
+        )
+    except OSError:
+        return False
+    return looks_like_harness_browser([part for part in raw.split("\0") if part])
+
+
 def clear_leftovers() -> None:
+    """Retire browser processes left behind by an earlier run of this harness.
+
+    Only processes accepted by :func:`is_own_leftover` are signalled, and only
+    the harness's own log files are removed.
+    """
     listing = subprocess.run(["pgrep", "-f", str(BINARY)], capture_output=True, text=True)
-    for pid in listing.stdout.split():
-        if not pid.isdigit() or int(pid) == os.getpid():
-            continue
-        command = subprocess.run(
-            ["/proc", pid, "cmdline"], capture_output=True, text=True
-        ).stdout
-        if LEFTOVER_MARKER not in command:
-            continue
+    mine = [pid for pid in listing.stdout.split() if is_own_leftover(pid)]
+    for pid in mine:
         try:
             os.kill(int(pid), signal.SIGTERM)
         except ProcessLookupError:
             pass
-    if listing.stdout.split():
+    if mine:
         time.sleep(1.5)
+
+
+class WtypeFailed(RuntimeError):
+    """wtype could not deliver input, so no key-press result can be trusted."""
+
+
+def run_wtype(command: list[str], attempts: int = 3) -> None:
+    """Deliver input, retrying a transient wtype failure.
+
+    wtype talks to the compositor and occasionally fails while the session is
+    busy. Retrying is safe because a failed delivery sends nothing, whereas a
+    delivery that merely had no effect is retried by the caller instead.
+    """
+    problem = ""
+    for _ in range(attempts):
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            return
+        problem = result.stderr.strip() or f"exit {result.returncode}"
+        time.sleep(1.0)
+    raise WtypeFailed(f"{' '.join(command)}: {problem}")
 
 
 def press(key: str, ctrl: bool = False, shift: bool = False) -> None:
@@ -80,17 +153,11 @@ def press(key: str, ctrl: bool = False, shift: bool = False) -> None:
     command += ["-k", key]
     for modifier in modifiers:
         command += ["-m", modifier]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=30)
-    if result.returncode != 0:
-        raise SystemExit(f"wtype failed: {result.stderr.strip()}")
+    run_wtype(command)
 
 
 def type_text(text: str) -> None:
-    result = subprocess.run(
-        ["wtype", text], capture_output=True, text=True, timeout=30
-    )
-    if result.returncode != 0:
-        raise SystemExit(f"wtype failed: {result.stderr.strip()}")
+    run_wtype(["wtype", text])
 
 
 def activate(action: str) -> str:
@@ -151,11 +218,45 @@ def query(profile: pathlib.Path, sql: str) -> list[str]:
         connection.close()
 
 
+def wait_for(effect, seconds: float = 30.0, interval: float = 0.5) -> bool:
+    """Poll ``effect`` until it is true or the budget runs out."""
+    deadline = time.monotonic() + seconds
+    while True:
+        if effect():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
+
+
+def press_until(
+    key: str,
+    effect,
+    *,
+    ctrl: bool = False,
+    shift: bool = False,
+    attempts: int = 6,
+    settle: float = 1.5,
+) -> bool:
+    """Press a key until ``effect`` reports the change, or give up.
+
+    A mapped window does not hold keyboard focus the instant it appears, so a
+    single press issued right after startup can land nowhere. Retrying cannot
+    paper over a dead accelerator: a binding that does nothing leaves the state
+    unchanged, so every attempt fails and the check fails.
+    """
+    for _ in range(attempts):
+        press(key, ctrl=ctrl, shift=shift)
+        if wait_for(effect, seconds=settle, interval=0.25):
+            return True
+    return False
+
+
 class Browser:
     def __init__(self, profile: pathlib.Path, url: str) -> None:
         self.profile = profile
         self.log = tempfile.NamedTemporaryFile(  # a file, not a pipe: an undrained
-            prefix=LEFTOVER_MARKER,  # pipe would block the browser mid-test
+            prefix=LOG_PREFIX,  # pipe would block the browser mid-test
             suffix=".log",
             delete=False,
         )
@@ -227,6 +328,7 @@ def main() -> int:
                 "previous-tab", "reload", "bookmark", "bookmarks", "history",
                 "focus-address", "copy-page-address", "readability",
                 "zoom-in", "zoom-out", "zoom-reset", "print", "restore-closed",
+                "clear-browsing-data",
             }
             registered = set(action_names())
             check(
@@ -245,12 +347,23 @@ def main() -> int:
                 {"tables": tables},
             )
 
+            # The first page landing in history is the app's own signal that the
+            # view exists and the load finished, which is also the point at which
+            # the window can hold the keyboard.
+            first_load = wait_for(
+                lambda: first in query(profile, "SELECT url FROM history"), seconds=45
+            )
+            check(
+                "start_url_reaches_history",
+                first_load,
+                {"history": query(profile, "SELECT url FROM history")},
+            )
+            time.sleep(1.5)
+
             # The bookmark accelerator itself, not just the action behind it.
-            press("d", ctrl=True)
-            time.sleep(1.5)
+            press_until("d", lambda: query(profile, "SELECT url FROM bookmarks") == [first], ctrl=True)
             after_first = query(profile, "SELECT url FROM bookmarks")
-            press("d", ctrl=True)
-            time.sleep(1.5)
+            press_until("d", lambda: query(profile, "SELECT url FROM bookmarks") == [], ctrl=True)
             after_second = query(profile, "SELECT url FROM bookmarks")
             check(
                 "ctrl_d_bookmarks_and_unbookmarks_the_page",
@@ -263,17 +376,42 @@ def main() -> int:
             )
 
             # Ctrl+L, typing, and Enter have to reach the address entry of the
-            # focused tab, and the result has to reach history.
-            press("l", ctrl=True)
-            time.sleep(0.5)
-            type_text(second)
-            press("Return")
-            time.sleep(3)
+            # focused tab, and the result has to reach history. Whether the entry
+            # ended up focused is not observable from outside, so the whole
+            # sequence is repeated a few times: a dead shortcut never navigates,
+            # so every attempt fails and the check fails with it.
+            navigated = False
+            for _ in range(4):
+                press("l", ctrl=True)
+                time.sleep(0.5)
+                type_text(second)
+                press("Return")
+                navigated = wait_for(
+                    lambda: second in query(profile, "SELECT url FROM history"),
+                    seconds=8,
+                )
+                if navigated:
+                    break
             history = query(profile, "SELECT url FROM history ORDER BY id")
             check(
                 "ctrl_l_typing_and_enter_navigates",
-                second in history,
+                navigated,
                 {"history": history, "expected_to_contain": second},
+            )
+
+            # Clearing browsing data has to reach the profile, not just the UI.
+            before_clear = query(profile, "SELECT url FROM history")
+            activate("clear-browsing-data")
+            time.sleep(3)
+            after_clear = query(profile, "SELECT url FROM history")
+            check(
+                "clear_browsing_data_erases_history",
+                bool(before_clear) and after_clear == [],
+                {
+                    "before": before_clear,
+                    "after": after_clear,
+                    "log": browser.output()[-300:],
+                },
             )
 
             activate("new-tab")
@@ -287,6 +425,15 @@ def main() -> int:
                 "actions_and_keys_leave_the_window_alive",
                 browser.alive(),
                 {"alive": browser.alive(), "log": browser.output()[-400:]},
+            )
+        except WtypeFailed as error:
+            # Input could not be delivered at all, so the key-press checks above
+            # never got a fair run. Record that as its own failure instead of
+            # aborting, so the report still lists what did pass.
+            check(
+                "key_presses_reached_the_window",
+                False,
+                {"error": str(error), "log": browser.output()[-400:]},
             )
         finally:
             browser.stop()
