@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=R Browse
+GenericName=Web Browser
+Comment=A small local-first browser shell for GTK desktops
+Exec=rbrowse %U
+Icon=rbrowse
+Terminal=false
+Categories=Network;WebBrowser;
+Keywords=web;browser;internet;
+StartupNotify=true
+StartupWMClass=io.github.rbrowse.RBrowse
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.rbrowse.RBrowse</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+
+  <name>R Browse</name>
+  <summary>A small local-first browser shell for GTK desktops</summary>
+
+  <description>
+    <p>
+      R Browse is a GTK4 and WebKitGTK 6.0 browser shell built around a strict
+      navigation boundary and a single local profile directory.
+    </p>
+    <ul>
+      <li>Tabs with lazy WebView creation, so an unselected tab costs no renderer</li>
+      <li>Private tabs on an ephemeral network session, never restored or recorded</li>
+      <li>Bookmarks and browsing history in one local SQLite profile</li>
+      <li>Downloads confined to the profile with sanitised file names</li>
+      <li>No telemetry, no account, no sync, and no update client</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.rbrowse.RBrowse.desktop</launchable>
+
+  <provides>
+    <binary>rbrowse</binary>
+  </provides>
+
+  <categories>
+    <category>Network</category>
+    <category>WebBrowser</category>
+  </categories>
+
+  <keywords>
+    <keyword>web</keyword>
+    <keyword>browser</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-09-26">
+      <description>
+        <p>First slice: tabs, navigation boundary, private tabs, bookmarks, history, downloads and a readability pass.</p>
+      </description>
+    </release>
+  </releases>
+</component>

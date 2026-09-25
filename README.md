@@ -166,6 +166,7 @@ make verify   # gate plus the diagram freshness check
 | `make e2e-gui` | Launches the real window and drives its actions over the session bus, writing `artifacts/e2e-gui/report.json`. Needs a display. |
 | `make perf` | Five smoke runs, writing `artifacts/perf.json`. |
 | `make diagrams-check` | Every committed SVG/PNG matches a fresh render. |
+| `make packaging` | The desktop entry, AppStream metadata and icon validate. |
 | `make gate` | All of the above except the diagram check, plus a printed check count. |
 | `make verify` | `gate` and `diagrams-check`. |
 
@@ -248,6 +249,24 @@ stores work and are asserted by the contract, but there is no window for them
 yet, only the star toggle.
 WebKitGTK 2.52 exposes only part of the WebExtensions surface, so extension
 work is gated on the API actually present rather than emulated.
+
+## Installing
+
+`make install` places the release binary, the desktop entry, the AppStream
+metadata and the icon under `$(PREFIX)`, defaulting to `/usr`:
+
+```sh
+make build-release
+sudo make install                     # or: make install PREFIX=$HOME/.local
+make install DESTDIR=/tmp/stage       # staging only, touches nothing
+make uninstall PREFIX=$HOME/.local
+```
+
+The desktop entry registers the `http` and `https` handlers, so R Browse can
+open links handed to it by other applications. `make packaging` validates the
+entry with `desktop-file-validate` and the metadata with `appstreamcli`; the one
+accepted AppStream warning is the missing project homepage, because this
+repository has no public URL yet.
 
 ## PlantUML assets
 
