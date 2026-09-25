@@ -6,6 +6,7 @@ use gtk4::glib;
 use gtk4::glib::Propagation;
 use gtk4::prelude::*;
 use libadwaita as adw;
+use libadwaita::prelude::*;
 use rbrowse::{config::Config, downloads, navigation, readability, storage};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -119,6 +120,9 @@ struct PageState {
     readable: gtk::Button,
     /// Whether this tab is showing the readability stylesheet.
     readable_on: Cell<bool>,
+    /// Weak window handle, so dialogs parent to the window without keeping it
+    /// alive.
+    window: glib::WeakRef<adw::ApplicationWindow>,
     /// Per-tab zoom level, kept here so switching tabs restores it.
     zoom: Cell<f64>,
     /// Label showing the zoom percentage, kept in step with `zoom`.
@@ -304,6 +308,50 @@ impl Shell {
         }
     }
 
+    /// Erase the profile's own history and WebKit's site data.
+    ///
+    /// Both are cleared: the SQLite history rows, and the cookies, local
+    /// storage and caches WebKit holds for this profile's network session.
+    fn clear_browsing_data(&self) {
+        let history_removed = match self.store.borrow().clear_history() {
+            Ok(removed) => removed,
+            Err(error) => {
+                self.report(&format!("could not clear history: {error}"));
+                return;
+            }
+        };
+        let Some(manager) = self.browser.normal_network.website_data_manager() else {
+            self.report("no website data manager for this profile");
+            return;
+        };
+        // The callback runs off the main thread, so it carries a plain string
+        // rather than the session object.
+        let location = manager
+            .base_data_directory()
+            .map(|dir| dir.to_string())
+            .unwrap_or_else(|| "this profile".to_string());
+        manager.clear(
+            webkit6::WebsiteDataTypes::ALL,
+            glib::TimeSpan::from_seconds(0),
+            None::<&gtk::gio::Cancellable>,
+            move |result| match result {
+                Ok(()) => println!("cleared site data under {location}"),
+                Err(error) => eprintln!("clearing site data failed: {error}"),
+            },
+        );
+        self.report(&format!(
+            "cleared {history_removed} history entries and site data"
+        ));
+    }
+
+    /// Put a message in the selected tab's status line, if a tab is selected.
+    fn report(&self, message: &str) {
+        match self.selected() {
+            Some(state) => state.status.set_text(message),
+            None => eprintln!("{message}"),
+        }
+    }
+
     fn open_bookmarks(&self) {
         self.open_library(LibraryKind::Bookmarks);
     }
@@ -458,6 +506,57 @@ fn connect_zoom_buttons(
     // The percentage is a label, not a button: Ctrl+0 is the way back to 100%,
     // and the label keeps the current level visible at all times.
     label.set_sensitive(false);
+}
+
+/// Name a web-process death in words a person can act on.
+///
+/// The enum's own variant names are developer-facing, so a crash, a page that
+/// outgrew its memory limit and an intentional teardown are told apart here.
+fn describe_termination(reason: webkit6::WebProcessTerminationReason) -> &'static str {
+    use webkit6::WebProcessTerminationReason as Reason;
+    match reason {
+        Reason::Crashed => "the page crashed",
+        Reason::ExceededMemoryLimit => "the page used too much memory",
+        Reason::TerminatedByApi => "the page was closed by the browser",
+        _ => "the page was stopped for an unknown reason",
+    }
+}
+
+/// Ask before granting a site a device capability.
+///
+/// The default is refusal: the dialog starts on "Deny" and dismissing it denies,
+/// so a page never gains camera, microphone or location access by default.
+fn ask_for_permission(state: &PageRef, request: &webkit6::PermissionRequest) {
+    // The request object exposes no URI, so the origin shown is the tab's own
+    // current address, which is what the person is looking at anyway.
+    let origin = current_state_url(state);
+    let origin = if origin == "about:blank" {
+        "this page".to_string()
+    } else {
+        origin
+    };
+    let dialog = adw::AlertDialog::new(
+        Some("Allow this capability?"),
+        Some(&format!(
+            "{origin} is asking for a capability such as the camera or microphone."
+        )),
+    );
+    dialog.add_response("deny", "Deny");
+    dialog.add_response("allow", "Allow");
+    dialog.set_response_appearance("allow", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("deny"));
+    dialog.set_close_response("deny");
+
+    let request = request.clone();
+    dialog.connect_response(None, move |dialog, response| {
+        if response == "allow" {
+            request.allow();
+        } else {
+            request.deny();
+        }
+        dialog.close();
+    });
+    dialog.present(state.window.upgrade().as_ref());
 }
 
 fn connect_readability_button(state: &PageRef, button: &gtk::Button) {
@@ -745,6 +844,11 @@ fn install_actions(application: &adw::Application, shell: &Shell) {
         ("zoom-reset", &["<Primary>0"], Shell::reset_zoom),
         ("print", &["<Primary>p"], Shell::print),
         (
+            "clear-browsing-data",
+            &["<Primary><Shift>Delete"],
+            Shell::clear_browsing_data,
+        ),
+        (
             "restore-closed",
             &["<Primary><Shift>t"],
             Shell::restore_closed,
@@ -909,6 +1013,7 @@ fn create_page(
         },
         context: browser.context.clone(),
         view: RefCell::new(None),
+        window: browser.window.clone(),
         zoom: Cell::new(1.0),
         zoom_label: zoom_label.clone(),
         bookmark: bookmark.clone(),
@@ -1033,6 +1138,41 @@ fn realize_page(state: &PageRef) {
     // A tab can be switched to readability before it is ever selected, so the
     // flag is honoured here rather than only in the toggle.
     apply_readability_sheet(state);
+    {
+        // A failed load used to leave a blank page with no explanation.
+        let weak: Weak<PageState> = Rc::downgrade(state);
+        view.connect_load_failed(move |_, _, uri, error| {
+            let Some(state) = weak.upgrade() else {
+                return false;
+            };
+            state
+                .status
+                .set_text(&format!("could not load {uri}: {error}"));
+            false
+        });
+        let weak: Weak<PageState> = Rc::downgrade(state);
+        view.connect_web_process_terminated(move |_, reason| {
+            let Some(state) = weak.upgrade() else {
+                return;
+            };
+            state.status.set_text(&format!(
+                "the page stopped responding ({}); press Reload to try again",
+                describe_termination(reason)
+            ));
+        });
+        let weak: Weak<PageState> = Rc::downgrade(state);
+        view.connect_permission_request(move |_, request| {
+            let Some(state) = weak.upgrade() else {
+                // The tab is gone, so there is nobody to ask. Refuse rather than
+                // leave the request waiting on a window that no longer exists.
+                request.deny();
+                return true;
+            };
+            ask_for_permission(&state, request);
+            true
+        });
+    }
+
     let weak: Weak<PageState> = Rc::downgrade(state);
     let store = state.store.clone();
     view.connect_load_changed(move |view, event| {
