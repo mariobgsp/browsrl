@@ -806,23 +806,28 @@ impl Suggestions {
             return;
         }
         self.active.set(true);
-        let needle = typed.trim().to_lowercase();
+        let typed = typed.trim();
+        let needle = typed.to_lowercase();
         let candidates = self.candidates.borrow();
         let shown: Vec<usize> = candidates
             .iter()
             .enumerate()
-            .filter(|(_, url)| url.to_lowercase().contains(&needle))
+            .filter(|(_, url)| contains_ci(url.as_str(), typed))
             .map(|(index, _)| index)
             .take(SUGGESTION_ROWS)
             .collect();
         drop(candidates);
         if shown.is_empty() {
-            // Worth saying out loud: a field that offers nothing and a field that
-            // was never asked are the same from outside, and the text it matched
-            // is the only way to tell them apart.
-            log_event(&format!(
-                "nothing in this profile's history matches {needle:?}"
-            ));
+            // A line here is worth having when a person asked and got nothing,
+            // because that is otherwise indistinguishable from a field that was
+            // never asked. It is not worth having when the shell wrote the
+            // field, which is the common case and would turn typing into a run
+            // of stderr writes.
+            if self.asked.get() {
+                log_event(&format!(
+                    "nothing in this profile's history matches {needle:?}"
+                ));
+            }
             self.asked.set(false);
             self.rows.set_visible(false);
             self.set_cursor(None);
@@ -998,6 +1003,22 @@ fn needle_is_shells(typed: &str, written: Option<&str>) -> bool {
 /// and the search path still only goes out when Return is pressed. The addresses
 /// are read at most once every half minute and matched in memory, so typing a
 /// URL costs no database work per letter.
+/// Case-insensitive substring test that folds as it compares.
+///
+/// The candidate list is walked on every keystroke, so lowercasing each address
+/// would allocate once per address in the profile's history per key. URLs are
+/// ASCII in practice, so folding byte by byte is allocation-free and sufficient.
+fn contains_ci(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let needle = needle.as_bytes();
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
 fn offer_history(address: &gtk::Entry) -> Rc<Suggestions> {
     // A box of labels, not a list: a list claims the keyboard the moment a row is
     // selected, and a keyboard that arrives somewhere else is a keyboard this
@@ -1107,6 +1128,10 @@ fn build_chrome(tab_view: &adw::TabView) -> (adw::HeaderBar, gtk::Box, Chrome) {
     address.set_placeholder_text(Some("Address (use search: for a configured search)"));
     address.set_width_chars(48);
     address.set_hexpand(true);
+    // The field spans the window, so the address would otherwise sit against the
+    // left edge with most of the band empty beside it. Named in full because
+    // both the entry and the editable trait offer set_alignment.
+    gtk::prelude::EditableExt::set_alignment(&address, 0.5);
     let field = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     field.set_margin_top(6);
     field.set_margin_end(6);
