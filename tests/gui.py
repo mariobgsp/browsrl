@@ -119,6 +119,100 @@ class WtypeFailed(RuntimeError):
     """wtype could not deliver input, so no key-press result can be trusted."""
 
 
+class ForeignFocus(RuntimeError):
+    """Another window has the keyboard, so this harness will not type."""
+
+
+# Every key press is refused unless the focused window is this harness's own
+# browser. wtype injects into whatever is focused, so pressing while a terminal,
+# an editor or a person is on the keyboard would type a URL and press Return
+# into their window. A refused press fails the check that wanted it, which is the
+# right outcome: a missing keystroke is recoverable, a mangled terminal is not.
+KEYBOARD: dict[str, object] = {
+    "focus_known": False,
+    "foreign_focus_refusals": 0,
+    "presses": 0,
+}
+
+
+def focused_window_class() -> str | None:
+    """The compositor's focused window class, or None if it cannot be read."""
+    for command in (["hyprctl", "activewindow", "-j"], ["swaymsg", "-t", "get_tree", "-j"]):
+        if not shutil.which(command[0]):
+            continue
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            continue
+        try:
+            data = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            continue
+        node = data if isinstance(data, dict) else _focused_sway_node(data)
+        if isinstance(node, dict) and node.get("class"):
+            KEYBOARD["focus_known"] = True
+            return str(node["class"])
+    return None
+
+
+def _focused_sway_node(tree: object) -> dict | None:
+    """Find the focused *window* in a sway tree.
+
+    Sway marks both outputs and workspaces as focused, so the first focused node
+    found is not necessarily a window. The search therefore only accepts a
+    focused node that carries a class, and keeps descending past a focused
+    container to reach the window inside it.
+    """
+    if not isinstance(tree, list):
+        return None
+    for node in tree:
+        if not isinstance(node, dict):
+            continue
+        if node.get("focused") and node.get("class"):
+            return node
+        found = _focused_sway_node(node.get("nodes", []))
+        if found is not None:
+            return found
+    return None
+
+
+def focus_is_ours(current: str | None) -> bool:
+    """Whether a focused-window class means the keyboard is ours.
+
+    Split out from the query so the rule can be checked without a compositor.
+    ``None`` means the compositor could not be asked, which is answered yes: an
+    unqueryable compositor leaves focus unknown rather than known-foreign, and
+    refusing every press there would make the contract unrunnable rather than
+    safe.
+    """
+    if current is None:
+        return True
+    return current == APPLICATION_ID
+
+
+def own_window_has_focus() -> bool:
+    """True when the browser this harness opened is the focused window."""
+    return focus_is_ours(focused_window_class())
+
+
+def wait_for_own_focus(seconds: float = 6.0) -> bool:
+    deadline = time.monotonic() + seconds
+    while True:
+        if own_window_has_focus():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
+
+
+def require_own_focus() -> None:
+    if wait_for_own_focus():
+        return
+    KEYBOARD["foreign_focus_refusals"] = int(KEYBOARD["foreign_focus_refusals"]) + 1
+    raise ForeignFocus(
+        f"the focused window is {focused_window_class()!r}, not {APPLICATION_ID!r}"
+    )
+
+
 def run_wtype(command: list[str], attempts: int = 3) -> None:
     """Deliver input, retrying a transient wtype failure.
 
@@ -153,10 +247,14 @@ def press(key: str, ctrl: bool = False, shift: bool = False) -> None:
     command += ["-k", key]
     for modifier in modifiers:
         command += ["-m", modifier]
+    require_own_focus()
+    KEYBOARD["presses"] = int(KEYBOARD["presses"]) + 1
     run_wtype(command)
 
 
 def type_text(text: str) -> None:
+    require_own_focus()
+    KEYBOARD["presses"] = int(KEYBOARD["presses"]) + 1
     run_wtype(["wtype", text])
 
 
@@ -435,6 +533,12 @@ def main() -> int:
                 False,
                 {"error": str(error), "log": browser.output()[-400:]},
             )
+        except ForeignFocus as error:
+            check(
+                "keys_were_not_typed_into_another_window",
+                False,
+                {"error": str(error), "log": browser.output()[-400:]},
+            )
         finally:
             browser.stop()
 
@@ -444,6 +548,14 @@ def main() -> int:
         "binary": str(BINARY.relative_to(ROOT)),
         "driver": "GApplication actions over the session bus, plus wtype key presses",
         "checks": checks,
+        "keyboard": {
+            **KEYBOARD,
+            "rule": (
+                "a key press is only delivered while the focused window is "
+                f"{APPLICATION_ID}; refusals are counted, not typed anyway"
+            ),
+            "focus_queryable": KEYBOARD["focus_known"],
+        },
         "not_covered": [
             "visual results are checked by screenshot, not by an assertion",
             "WebKitWebDriver cannot drive this app in WebKitGTK 6.0",

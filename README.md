@@ -242,6 +242,19 @@ contract checks it against nine command lines, including a personal profile, a
 prefix buried in a nested path, and a path that tries to climb out of the
 temporary directory with `..`.
 
+It also refuses to type when the keyboard belongs to someone else. `wtype`
+injects into whichever window is focused, so a press landing while a terminal or
+an editor is focused would type a URL and press Return into it. Every press is
+therefore gated on the focused window being this harness's own browser, read from
+`hyprctl` or `swaymsg`; a refused press fails the check that wanted it and is
+counted in `artifacts/e2e-gui/report.json` under `keyboard`, rather than being
+typed anyway. On a compositor that cannot be queried, focus is unknowable rather
+than known-foreign, so the gate passes and the report records
+`focus_queryable: false`. The gate is covered offline by asserting that a press
+with a foreign window focused never reaches `wtype` at all, and the sway output
+parser is checked against a synthetic tree, because it has to skip a focused
+*container* to find the focused window inside it.
+
 Two things that key checks are up against, both real on a compositor: a mapped
 window does not hold the keyboard the instant it appears, and `wtype` can fail
 while the session is busy. So the contract waits for the app's own readiness

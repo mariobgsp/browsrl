@@ -221,6 +221,38 @@
       },
       "name": "unreliable_key_input_is_reported",
       "passed": true
+    },
+    {
+      "details": {
+        "foreign_focus_refused": true,
+        "own_focus_delivered": true,
+        "wtype_calls": [
+          [
+            "wtype",
+            "-M",
+            "ctrl"
+          ]
+        ]
+      },
+      "name": "keys_are_never_typed_into_another_window",
+      "passed": true
+    },
+    {
+      "details": {
+        "application_id": "io.github.browsrl.Browsrl",
+        "parsing": {
+          "sway_finds_deep_focused_leaf": "alacritty",
+          "sway_on_garbage_is_none": true,
+          "sway_without_focus_is_none": true
+        },
+        "rule": {
+          "foreign_class": false,
+          "our_class": true,
+          "unreadable_compositor": true
+        }
+      },
+      "name": "keyboard_focus_rule_is_correct",
+      "passed": true
     }
   ],
   "network": "loopback fixtures only",

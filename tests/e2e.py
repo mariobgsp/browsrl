@@ -377,6 +377,83 @@ def main() -> int:
         delivery,
     )
 
+    # The harness types into the focused window, so it must never type while
+    # something else has focus. Proved here by making a press with a foreign
+    # window focused and asserting that wtype was never called: no keystroke is
+    # injected into the session to test this.
+    typed: list[list[str]] = []
+    real_focus, real_wtype = gui.focused_window_class, gui.run_wtype
+    try:
+        gui.focused_window_class = lambda: "com.example.SomeOtherApp"
+        gui.run_wtype = lambda command, attempts=3: typed.append(command)
+        refused = False
+        try:
+            gui.press("d", ctrl=True)
+        except gui.ForeignFocus:
+            refused = True
+        typing_refused = refused and not typed
+
+        # And the same press is delivered when our own window is focused.
+        gui.focused_window_class = lambda: gui.APPLICATION_ID
+        gui.press("d", ctrl=True)
+        delivered = len(typed) == 1
+    finally:
+        gui.focused_window_class, gui.run_wtype = real_focus, real_wtype
+    record(
+        checks,
+        "keys_are_never_typed_into_another_window",
+        typing_refused and delivered,
+        {
+            "foreign_focus_refused": typing_refused,
+            "own_focus_delivered": delivered,
+            "wtype_calls": [command[:3] for command in typed],
+        },
+    )
+
+    # The focus rule and the compositor-output parsing, checked without one.
+    focus_rule = {
+        "our_class": gui.focus_is_ours(gui.APPLICATION_ID),
+        "foreign_class": gui.focus_is_ours("com.example.Terminal"),
+        "unreadable_compositor": gui.focus_is_ours(None),
+    }
+    sway_tree = [
+        {
+            "name": "workspace 1",
+            "focused": False,
+            "nodes": [{"name": "term", "class": "alacritty", "focused": False, "nodes": []}],
+        },
+        {
+            "name": "workspace 3",
+            "focused": True,
+            "nodes": [
+                {"name": "a", "class": "io.github.browsrl.Browsrl", "focused": False, "nodes": []},
+                {"name": "b", "class": "alacritty", "focused": True, "nodes": []},
+            ],
+        },
+    ]
+    parsing = {
+        "sway_finds_deep_focused_leaf": (gui._focused_sway_node(sway_tree) or {}).get("class"),
+        "sway_without_focus_is_none": gui._focused_sway_node([{"nodes": []}]) is None,
+        "sway_on_garbage_is_none": gui._focused_sway_node("not a tree") is None,
+    }
+    record(
+        checks,
+        "keyboard_focus_rule_is_correct",
+        focus_rule
+        == {
+            "our_class": True,
+            "foreign_class": False,
+            "unreadable_compositor": True,
+        }
+        and parsing
+        == {
+            "sway_finds_deep_focused_leaf": "alacritty",
+            "sway_without_focus_is_none": True,
+            "sway_on_garbage_is_none": True,
+        },
+        {"rule": focus_rule, "parsing": parsing, "application_id": gui.APPLICATION_ID},
+    )
+
     passed = all(bool(check["passed"]) for check in checks)
     report = {
         "passed": passed,
