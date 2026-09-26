@@ -508,6 +508,16 @@ fn connect_zoom_buttons(
     label.set_sensitive(false);
 }
 
+/// Report a page-level event on stderr as well as in the status line.
+///
+/// A browser that fails quietly is hard to tell apart from one that is merely
+/// idle, and the status line is visible to nobody but the person at the screen.
+/// These are the events worth having in a terminal or a bug report, so they are
+/// the ones written down.
+fn log_event(message: &str) {
+    eprintln!("browsrl: {message}");
+}
+
 /// Name a web-process death in words a person can act on.
 ///
 /// The enum's own variant names are developer-facing, so a crash, a page that
@@ -548,14 +558,20 @@ fn ask_for_permission(state: &PageRef, request: &webkit6::PermissionRequest) {
     dialog.set_close_response("deny");
 
     let request = request.clone();
+    let for_log = origin.clone();
     dialog.connect_response(None, move |dialog, response| {
         if response == "allow" {
             request.allow();
+            log_event(&format!("granted a capability to {for_log}"));
         } else {
             request.deny();
+            log_event(&format!("refused a capability for {for_log}"));
         }
         dialog.close();
     });
+    log_event(&format!(
+        "a page at {origin} is asking for a capability; the answer defaults to deny"
+    ));
     dialog.present(state.window.upgrade().as_ref());
 }
 
@@ -1145,9 +1161,9 @@ fn realize_page(state: &PageRef) {
             let Some(state) = weak.upgrade() else {
                 return false;
             };
-            state
-                .status
-                .set_text(&format!("could not load {uri}: {error}"));
+            let message = format!("could not load {uri}: {error}");
+            state.status.set_text(&message);
+            log_event(&message);
             false
         });
         let weak: Weak<PageState> = Rc::downgrade(state);
@@ -1155,10 +1171,12 @@ fn realize_page(state: &PageRef) {
             let Some(state) = weak.upgrade() else {
                 return;
             };
-            state.status.set_text(&format!(
+            let message = format!(
                 "the page stopped responding ({}); press Reload to try again",
                 describe_termination(reason)
-            ));
+            );
+            state.status.set_text(&message);
+            log_event(&message);
         });
         let weak: Weak<PageState> = Rc::downgrade(state);
         view.connect_permission_request(move |_, request| {

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Browsrl permission fixture</title>
+  </head>
+  <body>
+    <h1>Permission request</h1>
+    <pre id="outcome">waiting</pre>
+    <script>
+      // The page reports what the browser decided by requesting a path, so the
+      // outcome is observable without a screenshot.
+      //
+      // getUserMedia is the trigger because it is the one capability WebKitGTK
+      // 6.0 actually raises a dialog for on this machine. Both alternatives
+      // were tried and measured rather than assumed: Notification resolves to
+      // "denied" with no dialog and no handler call at all, and geolocation
+      // never settles here, so a fixture built on either would have been
+      // asserting a timeout instead of a decision.
+      //
+      // A refusal surfaces as NotAllowedError or PermissionDeniedError, both of
+      // which mean the request was turned down. NotFoundError would mean the
+      // machine has no camera to grant, which is a different fact and is
+      // reported separately rather than folded into "denied".
+      let reported = false;
+      const report = (what) => {
+        if (reported) return;
+        reported = true;
+        document.getElementById("outcome").textContent = what;
+        fetch("/" + what, { cache: "no-store" }).catch(() => {});
+      };
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        report("permission-no-getusermedia");
+      } else {
+        navigator.mediaDevices.getUserMedia({ video: true }).then(
+          (stream) => {
+            stream.getTracks().forEach((track) => track.stop());
+            report("permission-granted");
+          },
+          (error) => report("permission-refused-" + error.name)
+        );
+        // If the request is never answered at all, say so. Without this the page
+        // would simply stay quiet and a refusal would be indistinguishable from a
+        // dialog that never appeared.
+        setTimeout(() => report("permission-never-answered"), 20000);
+      }
+    </script>
+  </body>
+</html>

@@ -383,22 +383,24 @@ def main() -> int:
     # injected into the session to test this.
     typed: list[list[str]] = []
     real_focus, real_wtype = gui.focused_window_class, gui.run_wtype
+    real_wait = gui.wait_for_own_focus
     try:
+        # A foreign window holds the keyboard: the press must be refused, and
+        # wtype must not be reached at all.
         gui.focused_window_class = lambda: "com.example.SomeOtherApp"
+        gui.wait_for_own_focus = lambda seconds=6.0: False
         gui.run_wtype = lambda command, attempts=3: typed.append(command)
-        refused = False
-        try:
-            gui.press("d", ctrl=True)
-        except gui.ForeignFocus:
-            refused = True
-        typing_refused = refused and not typed
+        refused_result = gui.press("d", ctrl=True)
+        typing_refused = refused_result is False and not typed
 
         # And the same press is delivered when our own window is focused.
         gui.focused_window_class = lambda: gui.APPLICATION_ID
-        gui.press("d", ctrl=True)
-        delivered = len(typed) == 1
+        gui.wait_for_own_focus = real_wait
+        delivered_result = gui.press("d", ctrl=True)
+        delivered = delivered_result is True and len(typed) == 1
     finally:
         gui.focused_window_class, gui.run_wtype = real_focus, real_wtype
+        gui.wait_for_own_focus = real_wait
     record(
         checks,
         "keys_are_never_typed_into_another_window",

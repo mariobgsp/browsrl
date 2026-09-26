@@ -25,12 +25,52 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         return
 
 
+class RequestLog:
+    """The paths a fixture server has served, safe to read while requests run.
+
+    A page reports what happened to it by requesting a path, so the outcome the
+    shell produced becomes visible to a test without reading a screenshot or
+    inferring it from a title.
+    """
+
+    def __init__(self) -> None:
+        self._paths: list[str] = []
+        self._lock = threading.Lock()
+
+    def add(self, path: str) -> None:
+        with self._lock:
+            self._paths.append(path)
+
+    def paths(self) -> list[str]:
+        with self._lock:
+            return list(self._paths)
+
+
+class RecordingHandler(QuietHandler):
+    """A fixture handler that records every path it is asked for."""
+
+    def __init__(self, *args: Any, log: RequestLog, **kwargs: Any) -> None:
+        self.log = log
+        super().__init__(*args, **kwargs)
+
+    def do_GET(self) -> None:  # noqa: N802 - the name is fixed by the base class
+        self.log.add(self.path.split("?", 1)[0])
+        super().do_GET()
+
+
 class LocalFixtureServer:
     """Serve repository fixtures on loopback without contacting the Internet."""
 
     def __init__(self) -> None:
+        self.request_log = RequestLog()
         self._server = socketserver.ThreadingTCPServer(
-            ("127.0.0.1", 0), lambda *args, **kwargs: QuietHandler(*args, directory=str(FIXTURES), **kwargs)
+            ("127.0.0.1", 0),
+            lambda *args, **kwargs: RecordingHandler(
+                *args,
+                log=self.request_log,
+                directory=str(FIXTURES),
+                **kwargs,
+            ),
         )
         self._server.daemon_threads = True
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -39,6 +79,11 @@ class LocalFixtureServer:
     def base_url(self) -> str:
         host, port = self._server.server_address
         return f"http://{host}:{port}"
+
+    @property
+    def requested(self) -> list[str]:
+        """Every path served so far, in order, with query strings dropped."""
+        return self.request_log.paths()
 
     def __enter__(self) -> "LocalFixtureServer":
         self._thread.start()

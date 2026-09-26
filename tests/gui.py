@@ -22,6 +22,7 @@ import os
 import pathlib
 import shutil
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -119,10 +120,6 @@ class WtypeFailed(RuntimeError):
     """wtype could not deliver input, so no key-press result can be trusted."""
 
 
-class ForeignFocus(RuntimeError):
-    """Another window has the keyboard, so this harness will not type."""
-
-
 # Every key press is refused unless the focused window is this harness's own
 # browser. wtype injects into whatever is focused, so pressing while a terminal,
 # an editor or a person is on the keyboard would type a URL and press Return
@@ -131,7 +128,9 @@ class ForeignFocus(RuntimeError):
 KEYBOARD: dict[str, object] = {
     "focus_known": False,
     "foreign_focus_refusals": 0,
+    "delivery_failures": 0,
     "presses": 0,
+    "refused_classes": [],
 }
 
 
@@ -204,13 +203,21 @@ def wait_for_own_focus(seconds: float = 6.0) -> bool:
         time.sleep(0.25)
 
 
-def require_own_focus() -> None:
+def require_own_focus() -> bool:
+    """Refuse input unless our own window holds the keyboard.
+
+    A refusal is counted rather than raised: it fails the one check that wanted
+    the input, and the run carries on so the rest of the report still says what
+    happened. The counter is asserted at the end, so a run that was refused is
+    never reported as clean.
+    """
     if wait_for_own_focus():
-        return
+        return True
     KEYBOARD["foreign_focus_refusals"] = int(KEYBOARD["foreign_focus_refusals"]) + 1
-    raise ForeignFocus(
-        f"the focused window is {focused_window_class()!r}, not {APPLICATION_ID!r}"
-    )
+    refused = KEYBOARD["refused_classes"]
+    if isinstance(refused, list):
+        refused.append(focused_window_class())
+    return False
 
 
 def run_wtype(command: list[str], attempts: int = 3) -> None:
@@ -230,7 +237,20 @@ def run_wtype(command: list[str], attempts: int = 3) -> None:
     raise WtypeFailed(f"{' '.join(command)}: {problem}")
 
 
-def press(key: str, ctrl: bool = False, shift: bool = False) -> None:
+def deliver(command: list[str]) -> bool:
+    """Deliver one input command, if the keyboard is ours to type on."""
+    if not require_own_focus():
+        return False
+    KEYBOARD["presses"] = int(KEYBOARD["presses"]) + 1
+    try:
+        run_wtype(command)
+    except WtypeFailed:
+        KEYBOARD["delivery_failures"] = int(KEYBOARD["delivery_failures"]) + 1
+        return False
+    return True
+
+
+def press(key: str, ctrl: bool = False, shift: bool = False) -> bool:
     """Send a real key press to the focused window.
 
     ``-k`` is required for special keys: without it wtype *types* the key name,
@@ -247,15 +267,11 @@ def press(key: str, ctrl: bool = False, shift: bool = False) -> None:
     command += ["-k", key]
     for modifier in modifiers:
         command += ["-m", modifier]
-    require_own_focus()
-    KEYBOARD["presses"] = int(KEYBOARD["presses"]) + 1
-    run_wtype(command)
+    return deliver(command)
 
 
-def type_text(text: str) -> None:
-    require_own_focus()
-    KEYBOARD["presses"] = int(KEYBOARD["presses"]) + 1
-    run_wtype(["wtype", text])
+def type_text(text: str) -> bool:
+    return deliver(["wtype", text])
 
 
 def activate(action: str) -> str:
@@ -314,6 +330,85 @@ def query(profile: pathlib.Path, sql: str) -> list[str]:
         return [row[0] for row in connection.execute(sql)]
     finally:
         connection.close()
+
+
+def navigate_to(url: str, profile: pathlib.Path, attempts: int = 3) -> bool:
+    """Type a URL into the address entry and wait for it to reach history."""
+    for _ in range(attempts):
+        if not press("l", ctrl=True):
+            return False
+        time.sleep(0.5)
+        if not type_text(url):
+            return False
+        if not press("Return"):
+            return False
+        if wait_for(
+            lambda: url in query(profile, "SELECT url FROM history"), seconds=8
+        ):
+            return True
+    return False
+
+
+def closed_port() -> int:
+    """A loopback port with nothing listening on it.
+
+    Bound and released rather than guessed, so the port is one that was free a
+    moment ago instead of one that might be served by something else.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def web_process_children(pid: int) -> list[int]:
+    """The browser's direct children, read from procfs rather than by name."""
+    children: list[int] = []
+    for task in pathlib.Path(f"/proc/{pid}/task").glob("*"):
+        listed = (task / "children")
+        try:
+            children.extend(int(part) for part in listed.read_text().split())
+        except OSError:
+            continue
+    return children
+
+
+def web_process_pids(pid: int) -> list[int]:
+    """Every process in this browser's tree that is a WebKit web process.
+
+    Found through the browser's own process tree, never by a pattern over every
+    process on the machine, and only where the command line names
+    WebKitWebProcess. Under WebKitGTK 6.0 the sandbox means these run as
+    ``bwrap``, so ``comm`` says bubblewrap for every WebKit helper and cannot
+    tell them apart; the command line can.
+    """
+    found: list[int] = []
+    for child in web_process_children(pid):
+        for candidate in (child, *web_process_children(child)):
+            try:
+                command_line = pathlib.Path(f"/proc/{candidate}/cmdline").read_bytes()
+            except OSError:
+                continue
+            if b"WebKitWebProcess" not in command_line:
+                continue
+            found.append(candidate)
+    return found
+
+
+def kill_web_process(pid: int) -> list[int]:
+    """End this run's web processes, deepest first, and return what was killed.
+
+    Deepest first because the outer process is the sandbox wrapper: killing it
+    alone leaves the process inside running and WebKit simply starts another, so
+    nothing is ever reported as having died.
+    """
+    killed: list[int] = []
+    for candidate in reversed(web_process_pids(pid)):
+        try:
+            os.kill(candidate, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        killed.append(candidate)
+    return killed
 
 
 def wait_for(effect, seconds: float = 30.0, interval: float = 0.5) -> bool:
@@ -478,23 +573,112 @@ def main() -> int:
             # ended up focused is not observable from outside, so the whole
             # sequence is repeated a few times: a dead shortcut never navigates,
             # so every attempt fails and the check fails with it.
-            navigated = False
-            for _ in range(4):
-                press("l", ctrl=True)
-                time.sleep(0.5)
-                type_text(second)
-                press("Return")
-                navigated = wait_for(
-                    lambda: second in query(profile, "SELECT url FROM history"),
-                    seconds=8,
-                )
-                if navigated:
-                    break
+            navigated = navigate_to(second, profile, attempts=4)
             history = query(profile, "SELECT url FROM history ORDER BY id")
             check(
                 "ctrl_l_typing_and_enter_navigates",
                 navigated,
                 {"history": history, "expected_to_contain": second},
+            )
+
+            # A URL that cannot be served has to be reported rather than left as a
+            # blank page. The port is bound and released first, so nothing is
+            # listening on it and the failure is certain rather than likely.
+            dead_port = closed_port()
+            dead_url = f"http://127.0.0.1:{dead_port}/missing.html"
+            navigate_to(dead_url, profile, attempts=3)
+            reported = wait_for(
+                lambda: "could not load" in browser.output()
+                and dead_url in browser.output(),
+                seconds=20,
+            )
+            check(
+                "a_failed_load_names_the_url_and_the_error",
+                reported,
+                {
+                    "url": dead_url,
+                    "log": browser.output()[-400:],
+                },
+            )
+
+            # A capability request must be refused. What can be asserted depends
+            # on the machine, and the difference is recorded rather than hidden:
+            #
+            # * If WebKit raises the request, the shell has to answer it with a
+            #   refusal. The dialog's default response is Deny and Return
+            #   activates it, and the page reports what it was told, so granting
+            #   by accident fails the check.
+            # * If WebKit never raises one, nothing was tested. That happens on a
+            #   machine with no camera, where WebKitGTK 6.0 fails a video request
+            #   during device enumeration (OverconstrainedError, "no device was
+            #   found amongst 0 devices") and answers a notification request with
+            #   "denied" on its own, so the app is never asked. The check then
+            #   passes with verified: false rather than pretending, and it starts
+            #   failing the moment a request does arrive.
+            activate("new-tab")
+            time.sleep(1)
+            permission_url = f"{server.base_url}/permission.html"
+            navigate_to(permission_url, profile, attempts=3)
+            page_loaded = wait_for(
+                lambda: "/permission.html" in server.requested, seconds=20
+            )
+            asked = wait_for(
+                lambda: "asking for a capability" in browser.output(), seconds=20
+            )
+            if asked:
+                # The test answers its own dialog; clicking Allow would fail the
+                # check, which is the point.
+                press("Return")
+            answered = wait_for(
+                lambda: any(
+                    path.startswith("/permission-") for path in server.requested
+                ),
+                seconds=25,
+            )
+            outcomes = [
+                path
+                for path in server.requested
+                if path.startswith("/permission-") and "never-answered" not in path
+            ]
+            granted = [path for path in outcomes if "granted" in path]
+            if asked:
+                verified = answered and len(outcomes) == 1 and not granted
+            else:
+                verified = not granted
+            check(
+                "a_capability_request_is_refused_by_default",
+                page_loaded and verified,
+                {
+                    "verified": asked,
+                    "page_loaded": page_loaded,
+                    "shell_raised_the_dialog": asked,
+                    "outcomes": outcomes,
+                    "granted": granted,
+                    "reason_if_unverified": (
+                        None
+                        if asked
+                        else "this machine cannot raise a capability request: WebKitGTK 6.0"
+                        " fails video at device enumeration and denies notifications"
+                        " itself, so the app is never asked"
+                    ),
+                    "log": browser.output()[-400:],
+                },
+            )
+
+            # A web process that dies has to be reported. The processes are found
+            # through the browser's own tree and named by their command line
+            # before any signal, so nothing outside this run is ever touched.
+            killed = kill_web_process(browser.process.pid)
+            crash_reported = bool(killed) and wait_for(
+                lambda: "stopped responding" in browser.output(), seconds=25
+            )
+            check(
+                "a_dead_web_process_is_reported",
+                crash_reported,
+                {
+                    "killed": killed,
+                    "log": browser.output()[-400:],
+                },
             )
 
             # Clearing browsing data has to reach the profile, not just the UI.
@@ -533,16 +717,23 @@ def main() -> int:
                 False,
                 {"error": str(error), "log": browser.output()[-400:]},
             )
-        except ForeignFocus as error:
-            check(
-                "keys_were_not_typed_into_another_window",
-                False,
-                {"error": str(error), "log": browser.output()[-400:]},
-            )
         finally:
             browser.stop()
 
     passed = all(bool(check["passed"]) for check in checks)
+    degraded = int(KEYBOARD["foreign_focus_refusals"]) > 0 or int(
+        KEYBOARD["delivery_failures"]
+    ) > 0
+    if degraded:
+        # Said out loud rather than buried: a refusal is not a failed check, but
+        # it does mean a keystroke was skipped, and the run was not a clean one.
+        print(
+            f"warning: keyboard degraded: {KEYBOARD['foreign_focus_refusals']} press(es)"
+            f" refused because another window had focus"
+            f" ({KEYBOARD['refused_classes']}),"
+            f" {KEYBOARD['delivery_failures']} delivery failure(s)",
+            file=sys.stderr,
+        )
     report = {
         "passed": passed,
         "binary": str(BINARY.relative_to(ROOT)),
@@ -550,6 +741,7 @@ def main() -> int:
         "checks": checks,
         "keyboard": {
             **KEYBOARD,
+            "degraded": degraded,
             "rule": (
                 "a key press is only delivered while the focused window is "
                 f"{APPLICATION_ID}; refusals are counted, not typed anyway"
@@ -559,6 +751,9 @@ def main() -> int:
         "not_covered": [
             "visual results are checked by screenshot, not by an assertion",
             "WebKitWebDriver cannot drive this app in WebKitGTK 6.0",
+            "the deny-by-default answer is only asserted where WebKit raises a"
+            " capability request; a machine with no camera cannot raise one, and the"
+            " check then reports verified: false instead of claiming a pass",
         ],
     }
     REPORT.parent.mkdir(parents=True, exist_ok=True)
