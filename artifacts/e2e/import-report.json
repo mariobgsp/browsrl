@@ -146,7 +146,7 @@
     },
     {
       "details": {
-        "stderr": "import failed: could not read /tmp/brwsl-e2e-rr3x1lc8/nope.html: No such file or directory (os error 2)"
+        "stderr": "import failed: could not read /tmp/brwsl-e2e-rzxvs0dn/nope.html: No such file or directory (os error 2)"
       },
       "name": "import_reports_a_file_it_cannot_read",
       "passed": true

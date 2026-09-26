@@ -18,7 +18,7 @@ Everything still missing is listed as deferred below rather than stubbed out.
 | --- | --- |
 | Tabs | Add, close, cycle with wrap-around, per-tab back/forward/reload, dense re-numbering, last tab resets instead of closing. The window title follows the page in front |
 | Navigation | Strict `http`/`https`/`about:blank` allowlist, bare hosts normalised to HTTPS, opt-in search |
-| Address field | One field for every tab, showing the tab in front and offering the addresses this profile has been to, most recent first, from its own history: never looked up, read at most once every thirty seconds, and never offered for the app's own writes to the field |
+| Address field | One field for every tab, showing the tab in front and able to offer the addresses this profile has been to, most recent first, from its own history. It never offers them on its own: the Down arrow, or the control at the end of the field, asks for them, and Escape puts them away. Asking is the only thing that reads anything — typing narrows what is already in memory, and nothing is looked up anywhere |
 | Privacy | Private tabs on an ephemeral network session: never restored, never bookmarked, never in history |
 | Bookmarks | Star toggle in the window's bar or `Ctrl+D`, deduplicated by URL, `file:` and other schemes refused. `Ctrl+Shift+I` imports another browser's exported bookmarks file through a file chooser |
 | History | Written when WebKit reports a finished load, repeat visits collapsed, pruned to 5000 rows |

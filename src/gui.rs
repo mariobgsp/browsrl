@@ -576,6 +576,7 @@ impl Shell {
     }
 
     fn focus_address(&self) {
+        self.chrome.suggestions.mark_active();
         self.chrome.address.grab_focus();
         self.chrome.address.select_region(0, -1);
     }
@@ -706,9 +707,6 @@ const SUGGESTION_LIMIT: i64 = 500;
 /// How many rows are shown at once.
 const SUGGESTION_ROWS: usize = 8;
 
-/// How long before the addresses are read again, in microseconds.
-const SUGGESTION_READ_INTERVAL: i64 = 30 * 1_000_000;
-
 /// What a picked address should do: go there.
 type Navigate = Rc<dyn Fn(&str)>;
 
@@ -738,6 +736,14 @@ struct Suggestions {
     /// than as key presses. So the shell marks its own writes here, and a change
     /// that matches the mark is the shell talking to itself.
     written: Cell<Option<String>>,
+    /// Whether the rows have been asked for.
+    ///
+    /// Typing does not bring them up. It narrows them, so that asking afterwards
+    /// shows the addresses that match what has been typed - and nothing else
+    /// appears under the page until the field is asked, with the arrow key or the
+    /// control at the end of it. A field that offers itself on every letter is a
+    /// field that is talking over the page.
+    asked: Cell<bool>,
     /// Whether the field is the thing being typed into right now.
     ///
     /// The arrow keys that walk the rows and the Escape that puts them away are
@@ -746,8 +752,6 @@ struct Suggestions {
     /// is set from the field's own changes and cleared as soon as the field stops
     /// being the subject - when the shell writes it, and when the rows go away.
     active: Cell<bool>,
-    /// When the addresses were last read, in monotonic microseconds.
-    read_at: Cell<i64>,
     /// What to do with an address a person picked. Set by the window once it
     /// exists, because the shell that navigates is built after the chrome is.
     navigate: RefCell<Option<Navigate>>,
@@ -760,24 +764,17 @@ struct Suggestions {
 }
 
 impl Suggestions {
-    /// Re-read the addresses this profile has been to, if it is due.
+    /// Read the addresses this profile has been to.
+    ///
+    /// Called when the field is asked and not while it is being typed into, which
+    /// is the whole of the "no database work per letter" promise: one deliberate
+    /// question, one query. A throttle on top of that was tried and removed,
+    /// because it hid exactly the address somebody had just visited - they would
+    /// ask for suggestions and their own last page would not be among them.
     ///
     /// A read that fails leaves the previous list alone rather than emptying it
-    /// under a person who is halfway through typing.
-    fn refresh_if_due(&self, store: &Rc<RefCell<storage::SessionStore>>) {
-        // An empty list is read straight away, however recently it was read. The
-        // throttle is there to stop a query per letter, and it must not also stop
-        // the list from ever being filled: the first time the field is used in a
-        // window is often before anything has been visited, and a read at that
-        // moment returns nothing, and thirty seconds of nothing offered would look
-        // exactly like a broken field.
-        let now = glib::monotonic_time();
-        let last = self.read_at.get();
-        let empty = self.candidates.borrow().is_empty();
-        if !empty && last != 0 && now.saturating_sub(last) < SUGGESTION_READ_INTERVAL {
-            return;
-        }
-        self.read_at.set(now);
+    /// under a person who is halfway through choosing.
+    fn refresh(&self, store: &Rc<RefCell<storage::SessionStore>>) {
         let Ok(entries) = store.borrow().history(SUGGESTION_LIMIT) else {
             return;
         };
@@ -796,8 +793,9 @@ impl Suggestions {
         *self.candidates.borrow_mut() = urls;
     }
 
-    /// Work out what the typed text offers, and show it if anything does.
-    fn update(&self, typed: &str, store: &Rc<RefCell<storage::SessionStore>>) {
+    /// Work out what the typed text offers, and show the rows only if they were
+    /// asked for.
+    fn update(&self, typed: &str) {
         // The mark is always cleared, so a shell write that produced no change of
         // its own cannot swallow a later keystroke. The one thing it can swallow
         // is a person retyping exactly what the shell just put there, which costs
@@ -808,15 +806,7 @@ impl Suggestions {
             return;
         }
         self.active.set(true);
-        // Two letters at least: a one-letter set of rows is a list of everything,
-        // which is noise, and it covers the page before anybody has said
-        // anything.
         let needle = typed.trim().to_lowercase();
-        if needle.chars().count() < 2 {
-            self.hide();
-            return;
-        }
-        self.refresh_if_due(store);
         let candidates = self.candidates.borrow();
         let shown: Vec<usize> = candidates
             .iter()
@@ -833,7 +823,9 @@ impl Suggestions {
             log_event(&format!(
                 "nothing in this profile's history matches {needle:?}"
             ));
-            self.hide();
+            self.asked.set(false);
+            self.rows.set_visible(false);
+            self.set_cursor(None);
             return;
         }
         while let Some(row) = self.rows.first_child() {
@@ -866,11 +858,35 @@ impl Suggestions {
         let count = shown.len();
         *self.shown.borrow_mut() = shown;
         self.set_cursor(None);
-        self.rows.set_visible(true);
-        // What the field is offering is worth a line in the log: a set of rows
-        // that is not where it should be, or offers nothing, looks identical from
-        // outside the window.
-        log_event(&format!("offering {count} addresses for {needle:?}"));
+        if self.asked.get() {
+            self.rows.set_visible(true);
+            // Worth a line in the log: rows that are not where they should be, or
+            // that never came up when they were asked for, look identical from
+            // outside the window.
+            log_event(&format!("showing {count} addresses for {needle:?}"));
+        }
+    }
+
+    /// The field is the thing being typed into: the cursor has been put in it.
+    ///
+    /// This is what makes the arrow key ask rather than scroll the page, and it
+    /// is set by `focus_address` as well as by typing: putting the cursor in the
+    /// field is putting it in the field, whether or not a letter follows.
+    fn mark_active(&self) {
+        self.active.set(true);
+    }
+
+    /// Bring the rows up for whatever the field holds, having been asked.
+    fn ask(&self, typed: &str, store: &Rc<RefCell<storage::SessionStore>>) {
+        self.asked.set(true);
+        self.refresh(store);
+        // Asking is a person acting, so it is never the shell's own write, whatever
+        // the field happens to be holding. The mark is dropped rather than obeyed:
+        // a page has just loaded, the field holds its address, and the mark is
+        // still on it, so asking without dropping it would be taken for the shell
+        // talking to itself and nothing would come up.
+        self.written.set(None);
+        self.update(typed);
     }
 
     /// Move the keyboard on the list of rows, or off it.
@@ -948,6 +964,10 @@ impl Suggestions {
     /// moving down a little is the honest way to show they are being offered
     /// something.
     fn hide(&self) {
+        if self.rows.is_visible() {
+            log_event("put the addresses this profile has been to away");
+        }
+        self.asked.set(false);
         self.rows.set_visible(false);
         self.set_cursor(None);
         self.active.set(false);
@@ -956,6 +976,7 @@ impl Suggestions {
     /// Write the field from the shell, offering nothing for it.
     fn write(&self, entry: &gtk::Entry, text: &str) {
         self.written.set(Some(text.to_string()));
+        self.asked.set(false);
         self.rows.set_visible(false);
         self.set_cursor(None);
         self.active.set(false);
@@ -977,10 +998,7 @@ fn needle_is_shells(typed: &str, written: Option<&str>) -> bool {
 /// and the search path still only goes out when Return is pressed. The addresses
 /// are read at most once every half minute and matched in memory, so typing a
 /// URL costs no database work per letter.
-fn offer_history(
-    address: &gtk::Entry,
-    store: &Rc<RefCell<storage::SessionStore>>,
-) -> Rc<Suggestions> {
+fn offer_history(address: &gtk::Entry) -> Rc<Suggestions> {
     // A box of labels, not a list: a list claims the keyboard the moment a row is
     // selected, and a keyboard that arrives somewhere else is a keyboard this
     // browser has lost. Labels cannot be selected, so the row the keyboard is on
@@ -994,8 +1012,8 @@ fn offer_history(
         shown: RefCell::new(Vec::new()),
         cursor: Cell::new(None),
         written: Cell::new(None),
+        asked: Cell::new(false),
         active: Cell::new(false),
-        read_at: Cell::new(0),
         navigate: RefCell::new(None),
         me: RefCell::new(Weak::new()),
         rows: rows_box.clone(),
@@ -1005,9 +1023,8 @@ fn offer_history(
     rows_box.set_visible(false);
 
     let for_typed = suggestions.clone();
-    let store_for_typed = store.clone();
     address.connect_changed(move |entry| {
-        for_typed.update(&entry.text(), &store_for_typed);
+        for_typed.update(&entry.text());
     });
 
     suggestions
@@ -1026,6 +1043,8 @@ struct Chrome {
     zoom_in: gtk::Button,
     bookmark: gtk::Button,
     readable: gtk::Button,
+    /// The control that asks for the addresses the field can offer.
+    ask_button: gtk::Button,
     /// What the field is offering, which writes to the field go through.
     suggestions: Rc<Suggestions>,
 }
@@ -1042,10 +1061,7 @@ struct Chrome {
 /// and looked like a different kind of control; every button here is an icon
 /// with a tooltip, so the meaning lives in the tooltip and the row reads as one
 /// thing.
-fn build_chrome(
-    tab_view: &adw::TabView,
-    store: &Rc<RefCell<storage::SessionStore>>,
-) -> (adw::HeaderBar, gtk::Box, Chrome) {
+fn build_chrome(tab_view: &adw::TabView) -> (adw::HeaderBar, gtk::Box, Chrome) {
     let tab_bar = adw::TabBar::new();
     tab_bar.set_view(Some(tab_view));
     // Always shown: a strip that appears and disappears with the number of tabs
@@ -1097,8 +1113,14 @@ fn build_chrome(
     field.set_margin_bottom(6);
     field.set_margin_start(6);
     field.append(&address);
+    // The control that asks for the addresses and puts them away again, so being
+    // able to see them does not depend on knowing the arrow key.
+    let ask_button = gtk::Button::from_icon_name("open-menu-symbolic");
+    ask_button.set_tooltip_text(Some("Show the addresses this profile has been to (Down)"));
+    ask_button.set_focusable(false);
+    field.append(&ask_button);
 
-    let suggestions = offer_history(&address, store);
+    let suggestions = offer_history(&address);
     let chrome = Chrome {
         address,
         new_tab,
@@ -1111,6 +1133,7 @@ fn build_chrome(
         zoom_in,
         bookmark,
         readable,
+        ask_button,
         suggestions,
     };
     (header, field, chrome)
@@ -1363,7 +1386,7 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
     // titlebar property of its own, so the bar is the first band of the content
     // rather than the frame. Two bands in all - this one, then the field row -
     // where there were four.
-    let (header, field, chrome) = build_chrome(&tab_view, &store);
+    let (header, field, chrome) = build_chrome(&tab_view);
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.append(&header);
@@ -1652,8 +1675,25 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         shell_for_rows.navigate_selected(url);
     }));
 
+    // The control at the end of the field: it asks for the addresses, and it puts
+    // them away when they are already up.
+    let shell_for_ask = shell.clone();
+    let ask_button = chrome.ask_button.clone();
+    ask_button.connect_clicked(move |_| {
+        let suggestions = &shell_for_ask.chrome.suggestions;
+        if suggestions.rows.is_visible() {
+            suggestions.hide();
+        } else {
+            let typed = shell_for_ask.chrome.address.text();
+            let store_for_ask = shell_for_ask.browser.store.clone();
+            suggestions.ask(&typed, &store_for_ask);
+        }
+    });
+
     let suggestion_keys = gtk::EventControllerKey::new();
     let for_suggestion_keys = chrome.suggestions.clone();
+    let field_for_keys = chrome.address.clone();
+    let store_for_keys = store.clone();
     suggestion_keys.connect_key_pressed(move |_, keyval, _, _| {
         let suggestions = &for_suggestion_keys;
         if !suggestions.rows.is_visible() && !suggestions.active.get() {
@@ -1661,7 +1701,15 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         }
         match keyval {
             gtk::gdk::Key::Down => {
-                suggestions.move_cursor(1);
+                if suggestions.rows.is_visible() {
+                    suggestions.move_cursor(1);
+                } else {
+                    // Asked for: the rows come up for what has been typed, with the
+                    // first one already under the keyboard.
+                    let typed = field_for_keys.text();
+                    suggestions.ask(&typed, &store_for_keys);
+                    suggestions.set_cursor(Some(0));
+                }
                 glib::Propagation::Stop
             }
             gtk::gdk::Key::Up => {

@@ -664,17 +664,19 @@ def main() -> int:
                 {"history": history, "expected_to_contain": second},
             )
 
-            # The field offers the addresses this profile has been to, and it
-            # offers them to a person typing - never to the shell writing the field
-            # itself, which happens on every load, every tab switch and every
-            # navigation, and a popover opening on all of those would be
-            # unbearable. Both halves are observable in the log: what was offered,
-            # and when.
-            offers_before = browser.output().count("offering ")
-            # The harness refuses to type when the keyboard is not ours, and says
-            # so by returning False rather than by failing, so every step here is
-            # recorded: a check that reported "nothing was offered" when it had
-            # actually typed nothing would be worse than no check.
+            # The field can offer the addresses this profile has been to, and it
+            # does not offer them on its own: typing narrows them, and the rows
+            # come up only when the field is asked - the arrow key, or the control
+            # at the end of it. Every step is recorded, because the harness
+            # refuses to type when the keyboard is not ours and says so by
+            # returning False, and a check that reported "nothing was offered"
+            # when it had typed nothing would be worse than no check.
+            def offered() -> int:
+                return browser.output().count("showing ") + browser.output().count(
+                    "put the addresses"
+                )
+
+            before = offered()
             focused = wait_for_own_focus(seconds=8.0)
             pressed = press("l", ctrl=True) if focused else False
             time.sleep(0.5)
@@ -682,33 +684,40 @@ def main() -> int:
             # host is not: the server may be reached as 127.0.0.1 or as localhost
             # depending on how it was bound, and only the port is in both.
             typed = type_text(server.base_url.rsplit(":", 1)[-1]) if pressed else False
-            offered_while_typing = typed and wait_for(
-                lambda: browser.output().count("offering ") > offers_before,
-                seconds=15,
-            )
-            press("Escape")
-            time.sleep(0.5)
-            offers_after_escape = browser.output().count("offering ")
-            # A reload rewrites the field from the shell's side. Nothing may be
-            # offered for that.
+            time.sleep(1.5)
+            offered_by_typing = offered() > before
+            # Asked for, with the arrow key.
+            asked = press("Down") if typed else False
+            time.sleep(1.5)
+            shown_after_asking = offered() > before + (1 if offered_by_typing else 0)
+            # And put away again with Escape.
+            put_away = press("Escape") if asked else False
+            time.sleep(1.5)
+            # A reload rewrites the field from the shell's side, which must not
+            # cost the field its ability to be asked.
             activate("reload")
             time.sleep(3)
-            offered_for_shells_write = (
-                browser.output().count("offering ") > offers_after_escape
-            )
+            after_reload = press("l", ctrl=True) and press("Down")
+            time.sleep(1.5)
+            still_askable = offered() > (before + 1 + (1 if put_away else 0))
             check(
-                "the_field_offers_this_profiles_own_addresses",
-                offered_while_typing and not offered_for_shells_write,
+                "the_field_offers_addresses_only_when_asked",
+                typed
+                and not offered_by_typing
+                and shown_after_asking
+                and put_away
+                and after_reload
+                and still_askable,
                 {
-                    "history": query(profile, "SELECT url FROM history"),
-                    "app_log": browser.output()[-500:],
-                    "reads": browser.output().count("read ") ,
                     "focused": focused,
                     "ctrl_l_pressed": pressed,
                     "typed": typed,
-                    "offers_while_typing": browser.output().count("offering ")
-                    - offers_before,
-                    "offers_for_a_shell_write": offered_for_shells_write,
+                    "history": query(profile, "SELECT url FROM history"),
+                    "reads": browser.output().count("read "),
+                    "offered_by_typing_alone": offered_by_typing,
+                    "shown_after_asking": shown_after_asking,
+                    "put_away_with_escape": put_away,
+                    "still_askable_after_a_reload": still_askable,
                 },
             )
 

@@ -61,23 +61,28 @@ that finishes loading.
 ### What the field offers
 
 The addresses this profile has been to, most recent first, as a band between the
-field and the page while somebody is typing in it. Three rules, and each of them
-is a measurement rather than a preference:
+field and the page. Four rules, and each of them is a measurement rather than a
+preference:
 
+- **Asked for, never volunteered.** Typing narrows what the field could offer and
+  shows nothing. The rows come up when the Down arrow is pressed, or the control at
+  the end of the field is clicked, and Escape puts them away. A field that offers
+  itself on every letter is a field talking over the page, and the person who
+  wanted the list has a way to say so with the pointer as well as the keyboard.
 - **Local.** The candidates are the profile's own history. Nothing is looked up,
   and the search path still only goes out when Return is pressed.
-- **Read rarely, matched in memory.** The addresses are read at most once every
-  thirty seconds, and always when there are none to offer, so typing a URL costs no
-  database work per letter. The throttle must not also make the field look broken:
-  an empty list is read straight away, because the first use in a window is often
-  before anything has been visited.
+- **Read when asked, matched in memory.** Asking is one deliberate question, so it
+  reads the history once; typing never does, and the matching is a scan of
+  addresses already in memory. A throttle on the reading was tried and removed: it
+  hid exactly the address somebody had just visited, so they would ask for
+  suggestions and their own last page would not be among them.
 - **Offered to a person, not to the shell.** The field is also written by the app —
   a page finishing a load, a tab switching, a navigation — and none of those is
   somebody asking. So the shell marks its own writes and the rows stay down for
   them. Neither the focus nor the keyboard can tell the two apart on this desktop:
   the field reports no focus while it is being filled, and the characters arrive as
-  text rather than as key presses. That is worth knowing before anything is
-  built here on either of them.
+  text rather than as key presses. That is worth knowing before anything is built
+  here on either of them.
 
 The rows are plain labels rather than a list, and the row the keyboard is on is
 marked in the text. A list claims the keyboard the moment one of its rows is
