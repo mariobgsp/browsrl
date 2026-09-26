@@ -3,7 +3,12 @@ Type=Application
 Name=Brwsl
 GenericName=Web Browser
 Comment=A small local-first browser shell for GTK desktops
-Exec=brwsl %u
+# The web process corrupts its own heap while the DMA-BUF renderer passes
+# buffers between WebKitGTK and Mesa, and glibc takes the process down with
+# it on roughly one run in three. Turning that renderer off removes the path
+# that owns the corrupted allocation. See issue #1; drop this line when
+# WebKitGTK or Mesa is fixed.
+Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 brwsl %u
 Icon=brwsl
 Terminal=false
 Categories=Network;WebBrowser;
