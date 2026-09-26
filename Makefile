@@ -39,6 +39,21 @@ doctor:
 	@for package in gtk4 libadwaita-1 webkitgtk-6.0 sqlite3; do \
 		printf '%s: ' "$$package"; pkg-config --modversion "$$package"; \
 	done
+	@# Media support is GStreamer's, and WebKitGTK 6.0 crashes its renderer rather
+	@# than degrading when the audio sink or the H.264 decoder is missing - that
+	@# was measured, not guessed. So the elements are checked by name here, where
+	@# a person is already looking for what is wrong with a video page.
+	@if command -v gst-inspect-1.0 >/dev/null 2>&1; then \
+		for element in autoaudiosink avdec_h264 opusdec; do \
+			if gst-inspect-1.0 "$$element" >/dev/null 2>&1; then \
+				printf 'gstreamer %s: present\n' "$$element"; \
+			else \
+				printf 'gstreamer %s: MISSING (video will not play; Arch: pacman -S gst-plugins-good gst-libav)\n' "$$element"; \
+			fi; \
+		done; \
+	else \
+		printf 'gstreamer: gst-inspect-1.0 not found, so media support cannot be checked\n'; \
+	fi
 
 build:
 	cargo build

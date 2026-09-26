@@ -90,6 +90,13 @@ The default feature needs GTK4, libadwaita 1.x, WebKitGTK 6.0 (the `webkit6`
 feature targets WebKit 2.52), SQLite, `pkg-config`, and a C toolchain. Rust is
 pinned by `rust-toolchain.toml`.
 
+Video and audio additionally need GStreamer elements that WebKitGTK looks up by
+name: `autoaudiosink` for output and a decoder for whatever codec the site
+serves (`avdec_h264`, `opusdec`). Without them WebKitGTK 6.0 does not degrade
+gracefully — it crashes the renderer — so `make doctor` checks for them and
+names the packages when they are missing. On Arch: `gst-plugins-good` and
+`gst-libav`.
+
 ```sh
 make doctor    # toolchain and library versions
 make build
@@ -343,12 +350,14 @@ behind them.
   not remembered, so a site has to ask again.
 * Wayland is preferred by the native GTK stack, with the GTK X11 fallback.
 * Video and audio depend entirely on the GStreamer plugins WebKitGTK finds on the
-  machine. On a system without an audio sink, WebKitGTK 6.0 reports
+  machine, and the failure is harsh: with no audio sink, WebKitGTK 6.0 reports
   `GStreamer element autoaudiosink not found`, logs a NULL-pointer warning from
-  inside the web process and then **crashes the renderer**; the shell reports the
-  crash rather than pretending the page is fine. Measured here on Arch, where
-  `gst-plugins-good` was not installed. Installing it is a system package
-  decision, so it is not done automatically.
+  inside the web process and then **crashes the renderer**. The shell reports
+  that crash rather than pretending the page is fine. `make doctor` checks for
+  the elements by name — `autoaudiosink`, `avdec_h264`, `opusdec` — and says what
+  to install when one is missing. On Arch that is `gst-plugins-good` and
+  `gst-libav`; with them present a YouTube video plays with sound, measured by
+  PipeWire reporting live audio outputs.
 
 Deliberately not implemented:
 
