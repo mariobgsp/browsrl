@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Browsrl private tab fixture</title>
+  </head>
+  <body>
+    <h1>Private tab</h1>
+    <p id="state">waiting</p>
+    <script>
+      // Loaded only in a private tab. Announcing itself proves the page really
+      // rendered there, so "this URL is absent from history and from the saved
+      // session" is a statement about a page that loaded, not about a navigation
+      // that quietly failed.
+      document.getElementById("state").textContent = "loaded";
+      fetch("/private-tab-loaded", { cache: "no-store" }).catch(() => {});
+    </script>
+  </body>
+</html>

@@ -6,6 +6,7 @@
 //! safe leaf name before it is joined to the destination: no path separators,
 //! no parent references, and no leading dot that would hide the file.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// Refuse anything that could escape the download directory or overwrite
@@ -60,41 +61,29 @@ pub fn reserve(
             continue;
         }
         let candidate = directory.join(&name);
-        match reserve_file(&candidate) {
-            Ok(()) => return Ok(candidate),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(format!(
-                    "cannot reserve a download file in {}: {error}",
-                    directory.display()
-                ));
-            }
+        // Existence is checked, but nothing is created here. WebKit opens the
+        // destination itself with O_EXCL, so a placeholder file left behind by
+        // this function makes that open fail with EEXIST and the download dies
+        // with "File exists" - measured, not assumed: reserving by creating a
+        // placeholder broke every download while the name policy itself still
+        // passed its tests. Two downloads in one process are kept apart by the
+        // caller's own record of what it has already handed out.
+        if candidate.exists() {
+            continue;
         }
+        return Ok(candidate);
     }
     Err("no free download name was found".to_string())
 }
 
-#[cfg(unix)]
-fn reserve_file(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    // 0600: a download can be anything, so it is not world readable even
-    // inside the profile.
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .map(|_| ())
-}
-
-#[cfg(not(unix))]
-fn reserve_file(path: &Path) -> std::io::Result<()> {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map(|_| ())
+/// Make a finished download private to its owner.
+///
+/// WebKit creates the file with whatever the process umask allows, so the mode
+/// is set here rather than by a placeholder that the download could not then
+/// write to: 0600, because a download can be anything and is not world readable
+/// even inside the profile.
+pub fn restrict_mode(path: &Path) -> std::io::Result<()> {
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
 }
 
 fn split_extension(leaf: &str) -> (String, Option<String>) {

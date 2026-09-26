@@ -15,12 +15,12 @@ missing is listed as deferred below rather than stubbed out.
 
 | Area | What works today |
 | --- | --- |
-| Tabs | Add, close, cycle, per-tab back/forward/reload, dense re-numbering, last tab resets instead of closing |
+| Tabs | Add, close, cycle with wrap-around, per-tab back/forward/reload, dense re-numbering, last tab resets instead of closing |
 | Navigation | Strict `http`/`https`/`about:blank` allowlist, bare hosts normalised to HTTPS, opt-in search |
 | Privacy | Private tabs on an ephemeral network session: never restored, never bookmarked, never in history |
 | Bookmarks | Star toggle in the toolbar or `Ctrl+D`, deduplicated by URL, `file:` and other schemes refused |
 | History | Written when WebKit reports a finished load, repeat visits collapsed, pruned to 5000 rows |
-| Downloads | Saved into `profile/downloads`, server-supplied names reduced to a safe leaf, collisions numbered |
+| Downloads | Saved into `profile/downloads` as `0600`, server-supplied names reduced to a safe leaf, collisions numbered |
 | Readability | Per-tab pass that constrains measure, enlarges type and hides page chrome, applied as a user style sheet with no script injected |
 | Zoom | Per-tab, 50% to 300%, with the level shown in the toolbar |
 | Print | `Ctrl+P` opens the WebKit print dialog for the selected tab |
@@ -30,7 +30,7 @@ missing is listed as deferred below rather than stubbed out.
 | Clear browsing data | `Ctrl+Shift+Delete` empties the history table and clears WebKit's cookies, storage and caches for the profile's session |
 | Load failures | A failed load names the URL and the error in the status line instead of leaving a blank page |
 | Crashed pages | A web process that dies is reported with the reason and a reload hint |
-| Session | Tabs restored on launch, saved on tab close and window close |
+| Session | Tabs and the selected tab restored on launch, saved on every tab switch, tab close and window close |
 | Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Shift+T` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+Shift+B` `Ctrl+H` `Ctrl+Shift+R` `Ctrl++` `Ctrl+-` `Ctrl+0` `Ctrl+P` `Ctrl+C` `Ctrl+Shift+Delete` |
 | Profile | One local directory, `0700`/`0600`, SQLite schema with in-place migration |
 
@@ -268,6 +268,35 @@ Those key checks are mutation-tested: putting the accelerators back on a `win.`
 action group that is never populated, which is a bug this project actually had,
 makes both key checks fail.
 
+### Shortcuts whose key is a shifted letter
+
+`Ctrl+Shift+T`, `Ctrl+Shift+N`, `Ctrl+Shift+P`, `Ctrl+Shift+B` and `Ctrl+Shift+R`
+are **not** GTK accelerators, and cannot be. This was measured, not guessed:
+GTK's parser folds every `<Primary><Shift>X` to the *lowercase* keyval with
+SHIFT in the modifier mask, and matching then compares keyval and modifiers
+exactly. A real `Ctrl+Shift+T` arrives as `T` with Ctrl+Shift, so the accel asks
+for something no key event can be. Probed directly against GTK:
+
+| Written | Parses to |
+| --- | --- |
+| `<Primary><Shift>t` | keyval `0x74` (`t`), Ctrl+Shift |
+| `<Primary><Shift>T` | keyval `0x74` (`t`), Ctrl+Shift — identical |
+| `<Primary>T` | keyval `0x54` (`T`), Ctrl only |
+
+None of the three can match, so the shortcut is dead while the action behind it
+works perfectly. Five bindings were dead for exactly this reason, and no test
+noticed, because every shortcut exercised until now was unshifted. Shifted
+*non*-letter shortcuts are unaffected: `Ctrl+Shift+Delete` and `Ctrl+Shift+Tab`
+are ordinary accelerators and do work.
+
+Those five are therefore handled by a window-level `EventControllerKey`, which
+sees the event before the focus widget does, and each window installs its own —
+a controller belongs to one widget, so without that a library window in front
+silently swallowed them. A `debug_assert` in `install_actions` rejects the
+spelling that cannot work, so the mistake cannot be reintroduced through the
+accelerator table; it was verified by putting `<Primary><Shift>t` back and
+watching the binary abort at startup with that explanation.
+
 What remains unasserted is the visual result: page rendering, the readability
 pass, and the library windows are checked by screenshot rather than by an
 assertion.
@@ -276,10 +305,23 @@ Three of the newer behaviours are covered differently, and it is worth being
 precise about which is which. Clearing browsing data is asserted: the contract
 activates the action and reads the history table before and after. The
 capability dialog and the two status messages (a failed load, a dead web
-process) compile and pass `clippy`, but they are not yet asserted by the
-contract, because provoking a camera request or a renderer crash from a fixture
-page is not something this harness can do reliably. They are exercised by hand
-with a page that asks for a camera, and with an address that cannot resolve.
+process) are asserted too — a failed load is provoked with a port that was bound
+and released first, a dead web process by ending this run's own, and a capability
+request where the machine can raise one at all.
+
+What is *not* asserted is the capability answer on a machine that cannot raise a
+request. This one has no camera, so WebKitGTK 6.0 fails a video request during
+device enumeration — "no device was found amongst 0 devices",
+`OverconstrainedError` — and answers a notification request with `denied` on its
+own, without asking the application; geolocation never settles. The check
+therefore reports `verified: false` with that reason instead of claiming a pass,
+and starts failing the moment a request does arrive and the answer is not a
+refusal.
+
+Two features are not observable from outside the process at all and are checked
+by hand: the print dialog, which is modal and would block the run, and the
+library windows' contents, whose rows are asserted only by the profile database
+behind them.
 
 ## Privacy and current boundaries
 

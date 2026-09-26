@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Browsrl measure fixture</title>
+    <style>
+      body { font-family: sans-serif; }
+    </style>
+  </head>
+  <body>
+    <h1>Measure</h1>
+    <p>A long line of text so the layout has something to wrap and the computed
+      measure means something at all.</p>
+    <script>
+      // The readability pass constrains the measure and enlarges the type with a
+      // user style sheet, so the page reports what it actually computed and the
+      // test can see the values change when the sheet is applied and removed. A
+      // screenshot could not tell those apart reliably; this can.
+      //
+      // The sheet constrains html rather than body, and sets body font-size, so
+      // both are reported: measuring the wrong element would report "none" and
+      // look like the pass had done nothing.
+      const report = () => {
+        const root = getComputedStyle(document.documentElement);
+        const body = getComputedStyle(document.body);
+        const value = [root.maxWidth, body.fontSize, body.lineHeight].join("~");
+        fetch("/measure-" + encodeURIComponent(value), { cache: "no-store" }).catch(
+          () => {}
+        );
+      };
+      report();
+      setInterval(report, 400);
+    </script>
+  </body>
+</html>

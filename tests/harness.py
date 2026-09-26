@@ -54,7 +54,22 @@ class RecordingHandler(QuietHandler):
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:  # noqa: N802 - the name is fixed by the base class
-        self.log.add(self.path.split("?", 1)[0])
+        path = self.path.split("?", 1)[0]
+        self.log.add(path)
+        if path == "/download":
+            # An attachment whose server-supplied name tries to climb out of the
+            # download directory. The traversal has to be reduced to a leaf by the
+            # browser, and the file has to land inside the profile.
+            body = b"payload\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header(
+                "Content-Disposition", 'attachment; filename="../../evil-payload.txt"'
+            )
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         super().do_GET()
 
 

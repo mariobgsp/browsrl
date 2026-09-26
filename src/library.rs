@@ -59,6 +59,11 @@ pub fn open(
         .default_width(560)
         .default_height(520)
         .build();
+    // The shortcuts whose key is a shifted letter are handled by a key
+    // controller, and a controller belongs to one window, so the library windows
+    // get their own. Without this, pressing one of them with a library window in
+    // front silently did nothing.
+    crate::gui::install_shifted_letter_shortcuts(&window, application);
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::Single);
     populate(&list, kind, store, &on_open, &window);

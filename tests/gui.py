@@ -332,6 +332,62 @@ def query(profile: pathlib.Path, sql: str) -> list[str]:
         connection.close()
 
 
+def session_tabs(profile: pathlib.Path) -> list[tuple[int, str, int]]:
+    """The saved session: (position, url, selected) in tab order."""
+    connection = sqlite3.connect(f"file:{profile}/session.sqlite?mode=ro", uri=True)
+    try:
+        return [
+            (int(row[0]), row[1], int(row[2]))
+            for row in connection.execute(
+                "SELECT position, url, selected FROM session_tabs ORDER BY position"
+            )
+        ]
+    finally:
+        connection.close()
+
+
+def selected_url(profile: pathlib.Path) -> str | None:
+    for _, url, selected in session_tabs(profile):
+        if selected:
+            return url
+    return None
+
+
+def path_hits(paths: list[str], wanted: str) -> int:
+    return sum(1 for path in paths if path == wanted)
+
+
+def clipboard_text() -> str | None:
+    """What the clipboard currently holds, or None if it cannot be read."""
+    if not shutil.which("wl-paste"):
+        return None
+    try:
+        result = subprocess.run(
+            ["wl-paste", "--no-newline"], capture_output=True, text=True, timeout=5
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def our_toplevels() -> list[str]:
+    """Titled windows the compositor says belong to this application."""
+    if not shutil.which("hyprctl"):
+        return []
+    result = subprocess.run(
+        ["hyprctl", "clients", "-j"], capture_output=True, text=True, timeout=10
+    )
+    try:
+        clients = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [
+        str(client.get("title") or "")
+        for client in clients
+        if client.get("class") == APPLICATION_ID
+    ]
+
+
 def navigate_to(url: str, profile: pathlib.Path, attempts: int = 3) -> bool:
     """Type a URL into the address entry and wait for it to reach history."""
     for _ in range(attempts):
@@ -581,6 +637,209 @@ def main() -> int:
                 {"history": history, "expected_to_contain": second},
             )
 
+            # Reload has to reach the engine, which is observable as the page being
+            # fetched a second time.
+            before_reload = path_hits(server.requested, "/two.html")
+            activate("reload")
+            reloaded = wait_for(
+                lambda: path_hits(server.requested, "/two.html") > before_reload,
+                seconds=20,
+            )
+            check(
+                "reload_refetches_the_current_page",
+                reloaded,
+                {
+                    "hits_before": before_reload,
+                    "hits_after": path_hits(server.requested, "/two.html"),
+                },
+            )
+
+            # Tab lifecycle, asserted through the saved session because that is
+            # the only record of tab structure a test can read. The session is
+            # written when the selection changes and when a tab closes, so a close
+            # is what makes the remaining tabs visible.
+            activate("new-tab")
+            time.sleep(1)
+            navigate_to(f"{server.base_url}/one.html", profile, attempts=3)
+            two_tabs = wait_for(
+                lambda: len(session_tabs(profile)) >= 1, seconds=20
+            )
+            activate("close-tab")
+            after_close = wait_for(
+                lambda: [url for _, url, _ in session_tabs(profile)] == [second],
+                seconds=20,
+            )
+            check(
+                "closing_a_tab_removes_it_from_the_saved_session",
+                two_tabs and after_close,
+                {
+                    "expected_after_close": [second],
+                    "session": session_tabs(profile),
+                },
+            )
+
+            # Ctrl+Shift+T has to bring the tab back. This is the binding that
+            # exposed the shifted-accelerator trap: the action worked while the
+            # shortcut did nothing, because <Primary><Shift>t can never match.
+            restored = press_until(
+                "t",
+                lambda: len(session_tabs(profile)) == 2
+                and f"{server.base_url}/one.html"
+                in [url for _, url, _ in session_tabs(profile)],
+                ctrl=True,
+                shift=True,
+                attempts=3,
+                settle=3.0,
+            )
+            check(
+                "a_closed_tab_is_reopened_by_ctrl_shift_t",
+                restored,
+                {"expected_two_tabs": 2, "session": session_tabs(profile)},
+            )
+
+            # Cycling has to move the selected flag, which is persisted on every
+            # switch, so this is a real record of which tab is in front. It only
+            # means something with more than one tab open, which is asserted rather
+            # than assumed.
+            tabs_open = len(session_tabs(profile))
+            session_before = session_tabs(profile)
+            before_cycle = selected_url(profile)
+            activate("next-tab")
+            moved = wait_for(
+                lambda: selected_url(profile) not in (None, before_cycle), seconds=15
+            )
+            session_after_next = session_tabs(profile)
+            after_next = selected_url(profile)
+            activate("previous-tab")
+            returned = wait_for(
+                lambda: selected_url(profile) == before_cycle, seconds=15
+            )
+            check(
+                "tab_cycling_moves_the_selected_tab",
+                tabs_open > 1 and moved and returned,
+                {
+                    "tabs_open": tabs_open,
+                    "before": before_cycle,
+                    "after_next": after_next,
+                    "after_previous": selected_url(profile),
+                    "session_before": session_before,
+                    "session_after_next": session_after_next,
+                },
+            )
+
+            # A private tab has to be invisible to the profile: not in history,
+            # not in the saved session, and not bookmarkable. The page announces
+            # itself first, so its absence from those tables is a fact about a page
+            # that really loaded.
+            activate("new-private-tab")
+            time.sleep(1)
+            private_url = f"{server.base_url}/private.html"
+            navigate_to(private_url, profile, attempts=3)
+            private_loaded = wait_for(
+                lambda: "/private-tab-loaded" in server.requested, seconds=20
+            )
+            time.sleep(1.5)
+            check(
+                "a_private_tab_is_never_written_to_the_profile",
+                private_loaded
+                and private_url not in query(profile, "SELECT url FROM history")
+                and private_url not in [url for _, url, _ in session_tabs(profile)],
+                {
+                    "page_loaded": private_loaded,
+                    "history": query(profile, "SELECT url FROM history"),
+                    "session": session_tabs(profile),
+                },
+            )
+            activate("close-tab")
+            time.sleep(1)
+
+            # A download whose server-supplied name tries to escape the download
+            # directory has to land inside the profile as a plain leaf. It is
+            # driven through the address bar rather than navigate_to, because a
+            # download never becomes a history row and waiting for one would only
+            # retry the same download.
+            press("l", ctrl=True)
+            time.sleep(0.5)
+            type_text(f"{server.base_url}/download")
+            press("Return")
+            download = profile / "downloads" / "evil-payload.txt"
+            arrived = wait_for(download.exists, seconds=40)
+            mode = oct(download.stat().st_mode & 0o777) if download.exists() else None
+            escaped = sorted(
+                str(path)
+                for path in profile.parent.glob("evil-payload.txt")
+            )
+            check(
+                "a_download_is_sanitised_into_the_profile",
+                arrived
+                and download.read_text(encoding="utf-8") == "payload\n"
+                and not escaped
+                and mode == "0o600",
+                {
+                    "arrived": arrived,
+                    "path": str(download),
+                    "mode": mode,
+                    "escaped_to": escaped,
+                    "downloads_dir": sorted(
+                        str(path) for path in (profile / "downloads").glob("*")
+                    )
+                    if (profile / "downloads").is_dir()
+                    else "no downloads directory",
+                    "log": browser.output()[-400:],
+                },
+            )
+
+            # The readability pass has to actually change the page. measure.html
+            # reports its computed max-width on a timer, so applying and removing
+            # the sheet is visible as a change in what the page reports.
+            measure_url = f"{server.base_url}/measure.html"
+            navigate_to(measure_url, profile, attempts=3)
+            wait_for(lambda: any(p.startswith("/measure-") for p in server.requested), seconds=20)
+            before_readable = {
+                path for path in server.requested if path.startswith("/measure-")
+            }
+            activate("readability")
+            wait_for(
+                lambda: bool(
+                    {
+                        path
+                        for path in server.requested
+                        if path.startswith("/measure-")
+                    }
+                    - before_readable
+                ),
+                seconds=20,
+            )
+            after_enabling = {
+                path for path in server.requested if path.startswith("/measure-")
+            }
+            changed = after_enabling - before_readable
+            activate("readability")
+            after_toggle = {
+                path for path in server.requested if path.startswith("/measure-")
+            }
+            check(
+                "the_readability_pass_changes_the_page_layout",
+                bool(changed) and len(after_toggle) > len(before_readable),
+                {
+                    "before": sorted(before_readable),
+                    "new_after_enabling": sorted(changed),
+                    "after": sorted(after_toggle),
+                },
+            )
+
+            # Copying the address has to reach the clipboard, which is the only
+            # place that value is observable from outside the process.
+            activate("copy-page-address")
+            copied = wait_for(
+                lambda: (clipboard_text() or "") == measure_url, seconds=10
+            )
+            check(
+                "copy_page_address_reaches_the_clipboard",
+                copied,
+                {"expected": measure_url, "clipboard": clipboard_text()},
+            )
+
             # A URL that cannot be served has to be reported rather than left as a
             # blank page. The port is bound and released first, so nothing is
             # listening on it and the failure is certain rather than likely.
@@ -703,10 +962,62 @@ def main() -> int:
             activate("previous-tab")
             press("h", ctrl=True)
             time.sleep(1)
+
+            # Ctrl+Shift+B has to open the bookmarks window, and it has to do so
+            # while a *library* window holds the keyboard: that is the case that
+            # was broken, because the shifted-letter shortcuts are served by a key
+            # controller and a controller belongs to one window, so the library
+            # windows each needed their own. The compositor is the only thing that
+            # can see a window appear, so this check needs hyprctl and says it was
+            # not run when there is none.
+            before_windows = len(our_toplevels())
+            press_until(
+                "b",
+                lambda: len(our_toplevels()) > before_windows,
+                ctrl=True,
+                shift=True,
+                attempts=3,
+                settle=2.0,
+            )
+            after_windows = our_toplevels()
+            check(
+                "ctrl_shift_b_opens_the_bookmarks_window",
+                bool(our_toplevels()) and len(after_windows) > before_windows,
+                {
+                    "windows_before": before_windows,
+                    "windows_after": len(after_windows),
+                    "titles": after_windows,
+                    "compositor_queryable": bool(our_toplevels()),
+                },
+            )
+
             check(
                 "actions_and_keys_leave_the_window_alive",
                 browser.alive(),
                 {"alive": browser.alive(), "log": browser.output()[-400:]},
+            )
+
+            # Session restore, which can only be observed by starting a second
+            # browser on the same profile, so it comes last. The first browser is
+            # stopped first: this shell is single-instance, so a second launch
+            # while one is running would become a tab in it instead of restoring
+            # anything.
+            saved = session_tabs(profile)
+            browser.stop()
+            browser = Browser(profile, "about:blank")
+            restored = wait_for(
+                lambda: [url for _, url, _ in session_tabs(profile)]
+                == [url for _, url, _ in saved],
+                seconds=30,
+            )
+            check(
+                "a_relaunch_restores_the_saved_tabs",
+                restored and bool(saved),
+                {
+                    "saved": saved,
+                    "after_relaunch": session_tabs(profile),
+                    "log": browser.output()[-300:],
+                },
             )
         except WtypeFailed as error:
             # Input could not be delivered at all, so the key-press checks above

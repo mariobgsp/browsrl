@@ -9,25 +9,82 @@ use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use webkit6::prelude::*;
 use webkit6::{Download, LoadEvent, NetworkSession, WebContext, WebView};
+
+/// Handle the shortcuts whose key is a shifted letter.
+///
+/// A window-level key controller sees the event before the focus widget does, so
+/// these fire whether the address entry, the page, or a dialog holds the
+/// keyboard. Anything else is passed straight on, so the accelerator table keeps
+/// working for every binding that can be expressed as one.
+pub(crate) fn install_shifted_letter_shortcuts(
+    window: &impl IsA<gtk::Widget>,
+    application: &adw::Application,
+) {
+    let keys: &[(gtk::gdk::Key, &str)] = &[
+        (gtk::gdk::Key::t, "restore-closed"),
+        (gtk::gdk::Key::n, "new-tab"),
+        (gtk::gdk::Key::p, "new-private-tab"),
+        (gtk::gdk::Key::b, "bookmarks"),
+        (gtk::gdk::Key::r, "readability"),
+    ];
+    // Owned, so the closure does not borrow the application it looks actions up
+    // in; an accelerator key can outlive this function by a long way.
+    let application = application.clone();
+    let controller = gtk::EventControllerKey::new();
+    controller.connect_key_pressed(move |_, keyval, _keycode, state| {
+        let wanted = gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::SHIFT_MASK;
+        if !state.contains(wanted) || state.contains(gtk::gdk::ModifierType::SUPER_MASK) {
+            return glib::Propagation::Proceed;
+        }
+        let Some((_, name)) = keys.iter().find(|(key, _)| *key == keyval) else {
+            return glib::Propagation::Proceed;
+        };
+        // Activated through the application, so a key and a menu item take the
+        // same path rather than two copies of the same behaviour.
+        application
+            .lookup_action(name)
+            .and_then(|action| action.downcast_ref::<gtk::gio::SimpleAction>().cloned())
+            .map_or(glib::Propagation::Proceed, |action| {
+                action.activate(None);
+                glib::Propagation::Stop
+            })
+    });
+    window.add_controller(controller);
+}
 
 /// Attach download handling to a network session.
 ///
 /// WebKit asks for a destination with a server-supplied name, so the answer is
 /// always a path inside the profile's download directory. A name that cannot be
 /// made safe is refused rather than guessed at, and the user sees why.
+///
+/// Nothing is created here. WebKit opens the destination itself, exclusively, so
+/// a placeholder file left behind by this function makes that open fail and the
+/// download dies with "File exists" - measured, not assumed: reserving by
+/// creating a placeholder broke every download while the name policy itself still
+/// passed its tests. Names already handed out in this process are remembered so
+/// two downloads of the same file in one session cannot collide, and a finished
+/// download is made 0600 because WebKit creates it with the process umask.
 fn watch_downloads(session: &NetworkSession, download_dir: PathBuf) {
     let dir = download_dir.clone();
+    let handed_out: Rc<RefCell<HashSet<PathBuf>>> = Rc::new(RefCell::new(HashSet::new()));
     session.connect_download_started(move |_, download| {
         let dir = dir.clone();
-        watch_one_download(download, &dir);
+        let handed_out = Rc::clone(&handed_out);
+        watch_one_download(download, &dir, handed_out);
     });
 }
 
-fn watch_one_download(download: &Download, download_dir: &std::path::Path) {
+fn watch_one_download(
+    download: &Download,
+    download_dir: &std::path::Path,
+    handed_out: Rc<RefCell<HashSet<PathBuf>>>,
+) {
     let dir = download_dir.to_path_buf();
     // The suggested name arrives with the destination request rather than from
     // the response, which is not available yet at this point in WebKit 6.0.
@@ -38,10 +95,15 @@ fn watch_one_download(download: &Download, download_dir: &std::path::Path) {
         let registrar = download.clone();
         let owner = download.clone();
         registrar.connect_decide_destination(move |_, suggested| {
-            // Reserve rather than merely check the name, so two downloads of
-            // the same file cannot be handed the same path.
-            match downloads::reserve(&dir, suggested, |_| false) {
+            // Choose rather than merely check the name, so two downloads of the
+            // same file in this session cannot be handed the same path.
+            let taken = Rc::clone(&handed_out);
+            let lookup_dir = dir.clone();
+            match downloads::reserve(&dir, suggested, move |name| {
+                taken.borrow().contains(&lookup_dir.join(name))
+            }) {
                 Ok(path) => {
+                    handed_out.borrow_mut().insert(path.clone());
                     owner.set_destination(&path.to_string_lossy());
                     true
                 }
@@ -63,8 +125,17 @@ fn watch_one_download(download: &Download, download_dir: &std::path::Path) {
         eprintln!("download failed: {error}");
     });
     let for_finished = download.clone();
-    for_finished.connect_finished(move |_| {
-        println!("download finished");
+    for_finished.connect_finished(move |download| {
+        // The file exists by now, and this is the only moment its mode can be
+        // tightened before a person opens it.
+        match download.destination().map(PathBuf::from) {
+            Some(path) => {
+                if let Err(error) = downloads::restrict_mode(&path) {
+                    eprintln!("could not restrict {}: {error}", path.display());
+                }
+            }
+            None => eprintln!("a finished download reported no destination"),
+        }
     });
 }
 
@@ -217,13 +288,42 @@ impl Shell {
         }
     }
 
+    /// Move to the next or previous tab, wrapping at either end.
+    ///
+    /// AdwTabView's own `select_next_page` and `select_previous_page` stop at the
+    /// ends, which was measured rather than assumed: pressing next on the last tab
+    /// left the saved session byte-for-byte unchanged. A shortcut named "next tab"
+    /// that does nothing on the last tab is a dead shortcut, so the wrap is done
+    /// here against the page list.
     fn select_relative(&self, next: bool) {
-        // AdwTabView owns the ordering, so let it do the wrapping rather than
-        // reimplementing index arithmetic over the page list.
-        if next {
-            self.tab_view.select_next_page();
+        let count = self.states.borrow().len();
+        if count < 2 {
+            return;
+        }
+        let Some(current) = self.tab_view.selected_page() else {
+            return;
+        };
+        let index = {
+            let states = self.states.borrow();
+            states
+                .iter()
+                .position(|state| state.page.borrow().as_ref() == Some(&current))
+        };
+        let Some(index) = index else {
+            return;
+        };
+        let target = if next {
+            (index + 1) % count
         } else {
-            self.tab_view.select_previous_page();
+            (index + count - 1) % count
+        };
+        let page = self
+            .states
+            .borrow()
+            .get(target)
+            .and_then(|state| state.page.borrow().as_ref().map(|page| page.clone()));
+        if let Some(page) = page {
+            self.tab_view.set_selected_page(&page);
         }
     }
 
@@ -747,6 +847,15 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
             realize_page(&state);
             shell_for_select.refresh_bookmark(&state);
         }
+        // The selected tab is part of the session, so it is written down when it
+        // changes rather than only when a tab closes. Without this, a browser
+        // that ended without a clean shutdown reopened on the wrong tab, and the
+        // selection was the only part of the session that could be stale.
+        save_sessions(
+            &shell_for_select.states,
+            &shell_for_select.tab_view,
+            &shell_for_select.store,
+        );
     });
 
     let shell_for_new = shell.clone();
@@ -800,6 +909,7 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
     });
 
     install_actions(application, &shell);
+    install_shifted_letter_shortcuts(&window, application);
     window.present();
     Ok(())
 }
@@ -829,10 +939,10 @@ fn install_actions(application: &adw::Application, shell: &Shell) {
     // handle rather than borrowing the caller's.
     let shell = shell.clone();
     let actions: &[ActionBinding] = &[
-        ("new-tab", &["<Primary>t", "<Primary><Shift>n"], |shell| {
+        ("new-tab", &["<Primary>t"], |shell| {
             shell.add_tab(TabMode::Normal, "about:blank")
         }),
-        ("new-private-tab", &["<Primary><Shift>p"], |shell| {
+        ("new-private-tab", &[], |shell| {
             shell.add_tab(TabMode::Private, "about:blank")
         }),
         ("close-tab", &["<Primary>w"], Shell::close_selected),
@@ -848,7 +958,7 @@ fn install_actions(application: &adw::Application, shell: &Shell) {
         ),
         ("reload", &["<Primary>r", "F5"], Shell::reload_selected),
         ("bookmark", &["<Primary>d"], Shell::toggle_bookmark),
-        ("bookmarks", &["<Primary><Shift>b"], Shell::open_bookmarks),
+        ("bookmarks", &[], Shell::open_bookmarks),
         (
             "zoom-in",
             &["<Primary>plus", "<Primary>equal", "F5"],
@@ -864,17 +974,9 @@ fn install_actions(application: &adw::Application, shell: &Shell) {
             &["<Primary><Shift>Delete"],
             Shell::clear_browsing_data,
         ),
-        (
-            "restore-closed",
-            &["<Primary><Shift>t"],
-            Shell::restore_closed,
-        ),
+        ("restore-closed", &[], Shell::restore_closed),
         ("history", &["<Primary>h"], Shell::open_history),
-        (
-            "readability",
-            &["<Primary><Shift>r"],
-            Shell::toggle_readability,
-        ),
+        ("readability", &[], Shell::toggle_readability),
         ("focus-address", &["<Primary>l"], Shell::focus_address),
         ("copy-page-address", &["<Primary>c"], Shell::copy_address),
     ];
@@ -888,7 +990,46 @@ fn install_actions(application: &adw::Application, shell: &Shell) {
         // must name that group. Registering "win.<name>" here would silently
         // match nothing and leave every shortcut dead.
         debug_assert!(application.has_action(name));
+        for key in keys.iter().copied() {
+            debug_assert!(
+                !shifted_letter_is_lowercase(key),
+                "{name} is bound to {key}, whose shifted letter is lowercase; \
+                 holding shift makes the key event report the uppercase keyval and \
+                 GTK compares keyvals exactly, so the shortcut could never fire"
+            );
+        }
         application.set_accels_for_action(&format!("app.{name}"), keys);
+    }
+}
+
+/// Whether an accelerator spells its shifted letter in lowercase.
+///
+/// `Ctrl+Shift+T` cannot be written as an accelerator at all in this GTK, and the
+/// reason is not guesswork. The parser folds every `<Primary><Shift>X` to the
+/// *lowercase* keyval with SHIFT in the modifier mask, and matching then compares
+/// keyval and modifiers exactly - so the accel asks for `t` with Ctrl+Shift while
+/// a real Ctrl+Shift+T arrives as `T` with Ctrl+Shift. Probed against GTK
+/// directly: `<Primary><Shift>t` and `<Primary><Shift>T` both parse to keyval
+/// 0x74 with Ctrl+Shift, and `<Primary>T` parses to 0x54 with Ctrl only, so the
+/// keyval or the mask is always wrong. The shortcut is dead while the action
+/// behind it works perfectly, and five bindings were dead for that reason.
+///
+/// The shifted-letter shortcuts are therefore handled by
+/// [`install_shifted_letter_shortcuts`], and this guard keeps the spelling that
+/// cannot work out of the accelerator table.
+///
+/// Only the final key is judged: `<Primary>t` is correct as written, and so are
+/// `<Primary><Shift>Tab` and `<Primary><Shift>Delete`, whose final keys are not
+/// letters at all.
+fn shifted_letter_is_lowercase(key: &str) -> bool {
+    if !key.contains("<Shift>") {
+        return false;
+    }
+    match key.rsplit('>').next() {
+        Some(last) => {
+            last.len() == 1 && last.chars().all(|character| character.is_ascii_lowercase())
+        }
+        None => false,
     }
 }
 
