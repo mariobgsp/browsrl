@@ -99,8 +99,12 @@ diagrams-check:
 check-desktop:
 	@desktop-file-validate $(ASSETS)/$(APP_ID).desktop && echo "desktop entry: valid"
 	@python3 -c "import xml.etree.ElementTree as E; E.parse('$(ASSETS)/$(APP_ID).metainfo.xml'); print('metainfo xml: well formed')"
-	@python3 -c "d=open('$(ASSETS)/browsrl-128.png','rb').read(); \
-		assert d[:8]==b'\\x89PNG\\r\\n\\x1a\\n', 'not a png'; print('icon: valid png')"
+	@python3 -c "import struct; \
+		d=open('$(ASSETS)/browsrl-128.png','rb').read(); \
+		assert d[:8]==b'\\x89PNG\\r\\n\\x1a\\n', 'not a png'; \
+		w,h=struct.unpack('>II', d[16:24]); \
+		assert (w,h)==(128,128), f'icon is {w}x{h}, expected 128x128'; \
+		print(f'icon: valid png, {w}x{h}, {len(d)} bytes')"
 	@# appstreamcli reports the missing project homepage as a warning. This
 	@# repository has no public URL yet, so that warning is accepted and only a
 	@# real error (an "E:" line) fails the check.

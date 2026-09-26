@@ -425,6 +425,28 @@ installer should do behind your back. `make packaging` validates the entry with
 AppStream warning is the missing project homepage, because this repository has
 no public URL yet.
 
+## The icon
+
+`assets/browsrl-128.png` is a lowercase Latin `b` in a slab-serif letterform,
+drawn as pixels: a stem with a top serif, a bowl on the lower right, and a
+bottom serif. It is black on white, 128×128, with no anti-aliasing at all — the
+file contains exactly two colours and no grey pixels, so the edges stay square at
+any size a launcher picks.
+
+It is generated, not drawn by hand in an editor, so it can be changed as text:
+
+```sh
+python3 scripts/make-icon.py --preview          # see the glyph in the terminal
+python3 scripts/make-icon.py assets/browsrl-128.png
+make packaging                                  # validates it is a 128x128 PNG
+```
+
+The glyph is a character grid at the top of `scripts/make-icon.py`; edit those
+rows and re-run. The renderer trims to the ink, picks the largest whole-pixel
+scale that leaves a margin, and centres the result, so a grid with uneven empty
+borders still comes out centred. `make packaging` checks the magic bytes *and*
+the dimensions, so a truncated or placeholder icon fails the build.
+
 ## PlantUML assets
 
 ```sh
