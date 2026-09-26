@@ -51,6 +51,9 @@ pub struct Config {
     /// Downloads land here, inside the profile, never where a page asks.
     pub download_dir: PathBuf,
     pub start_url: String,
+    /// A bookmarks file to import, as a maintenance command rather than a
+    /// window: it is the one job that has to work while the browser is closed.
+    pub import_bookmarks: Option<PathBuf>,
     /// Whether `start_url` was asked for rather than defaulted to.
     ///
     /// The difference decides what happens when a session was saved *and* a URL
@@ -91,6 +94,7 @@ impl Config {
         let mut positional: Option<String> = None;
         let mut search_endpoint = None;
         let mut restore_session = true;
+        let mut import_bookmarks: Option<PathBuf> = None;
         let mut smoke = false;
         let mut storage_check = false;
 
@@ -141,6 +145,12 @@ impl Config {
                     search_endpoint = Some(endpoint);
                 }
                 "--no-restore" => restore_session = false,
+                "--import-bookmarks" => {
+                    import_bookmarks =
+                        Some(PathBuf::from(args.next().ok_or_else(|| {
+                            CliError::usage("--import-bookmarks needs a file path")
+                        })?));
+                }
                 "--smoke" => smoke = true,
                 // Head-less exercise of bookmarks, history and the schema.
                 "--storage-check" => storage_check = true,
@@ -200,6 +210,7 @@ impl Config {
             download_dir,
             start_url,
             start_url_given,
+            import_bookmarks,
             search_endpoint,
             restore_session,
             smoke,

@@ -80,6 +80,7 @@ clippy:
 
 e2e: build
 	python3 tests/e2e.py
+	python3 tests/import_check.py
 
 # Drives the real window through its own GApplication actions over the session
 # bus. Needs a display, so it is not part of `gate`.

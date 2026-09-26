@@ -1,7 +1,7 @@
 //! Browsrl entry point: argument handling, the offline smoke path, and the
 //! native shell hand-off.
 
-use browsrl::{config::Config, downloads, navigation, storage};
+use browsrl::{config::Config, downloads, import, navigation, storage};
 use serde_json::json;
 
 #[cfg(feature = "webkit")]
@@ -30,6 +30,21 @@ fn main() {
         return;
     }
 
+    if let Some(path) = config.import_bookmarks.clone() {
+        // A maintenance command: import the file, report exactly what happened,
+        // and exit. It deliberately does not open a window, because the one time
+        // this has to work is when the browser is closed and the profile is
+        // therefore not being written by anything else.
+        match run_import(&config, &path) {
+            Ok(report) => println!("{report}"),
+            Err(error) => {
+                eprintln!("import failed: {error}");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
+
     if config.storage_check {
         if let Err(error) = run_storage_check(&config) {
             eprintln!("storage check failed: {error}");
@@ -49,6 +64,35 @@ fn main() {
         let _ = &config;
         eprintln!("Browsrl was built without WebKit; use --smoke or --storage-check");
     }
+}
+
+/// Import another browser's bookmark file into this profile.
+///
+/// Printed as JSON because this is a command a person or a script runs, and "how
+/// many actually went in" is the only question that matters. The folder paths of
+/// a few entries are included so it can be seen that the structure was read
+/// rather than flattened.
+fn run_import(config: &Config, path: &std::path::Path) -> Result<String, String> {
+    config.ensure_profile_dirs()?;
+    let store = storage::SessionStore::open(config.database_path())?;
+    let entries = import::read_file(path).map_err(|error| error.to_string())?;
+    let report = import::apply(&store, &entries);
+    let mut sample = serde_json::Map::new();
+    for (url, folders) in &report.sample {
+        sample.insert(url.clone(), serde_json::json!(folders));
+    }
+    Ok(serde_json::json!({
+        "added": report.summary.added,
+        "duplicates": report.summary.duplicates,
+        "refused": report.summary.refused,
+        "failed": report.summary.failed,
+        "too_deep": report.summary.too_deep,
+        "folders": report.summary.folders,
+        "parsed": entries.len(),
+        "sample_folders": sample,
+        "summary": report.summary.to_string(),
+    })
+    .to_string())
 }
 
 /// Exercise the profile-level stores head-lessly: bookmarks, history, and the
@@ -112,15 +156,9 @@ fn run_storage_check(config: &Config) -> Result<(), String> {
         .and_then(|path| path.parent().map(|parent| parent == download_dir))
         .unwrap_or(false);
     names_ok &= escapes;
-    // Each successful reservation left an empty file; clear them so the check
-    // does not litter the profile.
-    for entry in std::fs::read_dir(&download_dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-    {
-        let _ = std::fs::remove_file(entry.path());
-    }
+    // A reservation no longer creates anything: WebKit opens the destination
+    // itself, so a placeholder would make the download fail. Nothing is left in
+    // the download directory to clean up.
 
     let ok = first_add
         && !second_add

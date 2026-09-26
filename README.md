@@ -18,7 +18,7 @@ missing is listed as deferred below rather than stubbed out.
 | Tabs | Add, close, cycle with wrap-around, per-tab back/forward/reload, dense re-numbering, last tab resets instead of closing. The window title follows the page in front |
 | Navigation | Strict `http`/`https`/`about:blank` allowlist, bare hosts normalised to HTTPS, opt-in search |
 | Privacy | Private tabs on an ephemeral network session: never restored, never bookmarked, never in history |
-| Bookmarks | Star toggle in the toolbar or `Ctrl+D`, deduplicated by URL, `file:` and other schemes refused |
+| Bookmarks | Star toggle in the toolbar or `Ctrl+D`, deduplicated by URL, `file:` and other schemes refused. `Ctrl+Shift+I` imports another browser's exported bookmarks file through a file chooser |
 | History | Written when WebKit reports a finished load, repeat visits collapsed, pruned to 5000 rows |
 | Downloads | Saved into `profile/downloads` as `0600`, server-supplied names reduced to a safe leaf, collisions numbered |
 | Readability | Per-tab pass that constrains measure, enlarges type and hides page chrome, applied as a user style sheet with no script injected |
@@ -31,7 +31,7 @@ missing is listed as deferred below rather than stubbed out.
 | Load failures | A failed load names the URL and the error in the status line instead of leaving a blank page |
 | Crashed pages | A web process that dies is reported with the reason; the toolbar's reload control is an icon, not a word |
 | Session | Tabs and the selected tab restored on launch, saved on startup, on every tab switch, on tab close and on window close. A `quit` action closes cleanly, which is the only way the session is written on the way out |
-| Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Shift+T` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+Shift+B` `Ctrl+H` `Ctrl+Shift+R` `Ctrl++` `Ctrl+-` `Ctrl+0` `Ctrl+P` `Ctrl+C` `Ctrl+Shift+Delete` |
+| Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Shift+T` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+Shift+B` `Ctrl+H` `Ctrl+Shift+R` `Ctrl++` `Ctrl+-` `Ctrl+0` `Ctrl+P` `Ctrl+C` `Ctrl+Shift+Delete` `Ctrl+Shift+I` `Ctrl+Shift+Q` |
 | Profile | One local directory, `0700`/`0600`, SQLite schema with in-place migration |
 
 ## Architecture
@@ -133,6 +133,7 @@ Usage: browsrl [--profile-dir PATH] [--database-path PATH] [--data-dir PATH]
 | `[URL]` | A single URL to open, exactly like every other browser. This is what the desktop entry's `%u` hands over when a link is opened from another application. One link at a time: a second URL is refused with a message rather than silently ignored, and the entry asks for `%u` rather than `%U` so it never promises more than the app delivers. A URL given at launch is **not** swallowed by a saved session: the session is restored and the URL opens on top of it, selected, the way the other browsers behave. |
 | `--search-endpoint` | Enables `search:` queries. Without it, search text is rejected instead of being sent anywhere. Must be `https`, except for a loopback host such as a local SearxNG. |
 | `--no-restore` | Ignore stored tabs and start from `--start-url`. |
+| `--import-bookmarks FILE` | Merge another browser's exported bookmarks into this profile and print a JSON summary of what happened. Head-less on purpose: the one time this has to work is when the browser is closed. The `import-bookmarks` action does the same thing through a file chooser while it is open. |
 | `--smoke` | Head-less contract path: validate the URL, write one session row, read it back, print JSON. |
 | `--storage-check` | Head-less exercise of bookmarks, history, download-name policy and the schema version, printed as JSON. |
 | `--download-dir` | Where downloads are saved; defaults to `downloads` inside the profile. |
@@ -330,6 +331,34 @@ Two features are not observable from outside the process at all and are checked
 by hand: the print dialog, which is modal and would block the run, and the
 library windows' contents, whose rows are asserted only by the profile database
 behind them.
+
+### Bookmark import
+
+`--import-bookmarks FILE`, or `Ctrl+Shift+I` for the same thing through a file
+chooser, reads the Netscape bookmark format that Firefox, Chrome, Chromium and
+Brave all export. The file is untrusted input, so it is bounded: a 32 MiB size
+cap, a 50,000 bookmark cap, a folder depth cap, and a stop at the first tag that
+never closes rather than a guess at what the rest of the file meant. A truncated
+file keeps the bookmarks that came before the cut, which is asserted.
+
+Only `http` and `https` survive — the same rule the store applies to a bookmark
+typed by hand, so an import is not a way to smuggle a `file:` or `javascript:`
+URL into the browser. HTML entities in titles and URLs are decoded, nested
+folders are read and reported (they are not stored, because folders are listed
+as deferred), duplicates collapse by URL, and one unusable entry never stops the
+rest: a bookmark file is often the only copy of that list a person has.
+
+Everything is counted rather than reported as a single yes:
+
+```
+{"added":9,"duplicates":1,"refused":2,"too_deep":0,"failed":0,"folders":3,"parsed":12}
+```
+
+`failed` is kept apart from `refused` on purpose, so a full disk or a locked
+database is never presented as a policy decision. Ten assertions cover what a
+real export contains — a duplicate inside one file, an untitled bookmark, a
+`javascript:` URL, a truncated file — and the folder-structure check is
+mutation-tested: never popping the folder stack makes it fail.
 
 ## Privacy and current boundaries
 

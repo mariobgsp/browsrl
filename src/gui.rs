@@ -31,6 +31,8 @@ pub(crate) fn install_shifted_letter_shortcuts(
         (gtk::gdk::Key::p, "new-private-tab"),
         (gtk::gdk::Key::b, "bookmarks"),
         (gtk::gdk::Key::r, "readability"),
+        (gtk::gdk::Key::i, "import-bookmarks"),
+        (gtk::gdk::Key::q, "quit"),
     ];
     // Owned, so the closure does not borrow the application it looks actions up
     // in; an accelerator key can outlive this function by a long way.
@@ -453,6 +455,79 @@ impl Shell {
             Some(state) => state.status.set_text(message),
             None => eprintln!("{message}"),
         }
+    }
+
+    /// Ask for another browser's bookmark file and merge it in.
+    ///
+    /// The picker is a `FileDialog` rather than a hand-rolled path entry, so it
+    /// gets the platform's own file chooser - a portal dialog where the session
+    /// has one - and the person can see the file before choosing it. The import
+    /// itself is the same code the `--import-bookmarks` command runs, so the two
+    /// cannot drift apart.
+    fn choose_bookmark_file(&self) {
+        let Some(window) = self.browser.window.upgrade() else {
+            self.report("the window is gone, so there is nothing to import into");
+            return;
+        };
+        let dialog = gtk::FileDialog::new();
+        dialog.set_title("Import bookmarks");
+        let store = self.store.clone();
+        let report_target = self.browser.window.clone();
+        dialog.open(
+            Some(&window),
+            None::<&gtk::gio::Cancellable>,
+            move |chosen| {
+                let file = match chosen {
+                    Ok(file) => file,
+                    Err(error) => {
+                        // A dismissed dialog is not a failure and says nothing.
+                        let dismissed = matches!(
+                            error.kind::<gtk::DialogError>(),
+                            Some(gtk::DialogError::Dismissed | gtk::DialogError::Cancelled)
+                        );
+                        if !dismissed {
+                            let message = error.to_string();
+                            log_event(&format!("bookmark import could not start: {message}"));
+                            tell(
+                                report_target.upgrade().as_ref(),
+                                "Bookmarks could not be imported",
+                                &message,
+                            );
+                        }
+                        return;
+                    }
+                };
+                let Some(path) = file.path() else {
+                    tell(
+                        report_target.upgrade().as_ref(),
+                        "Bookmarks could not be imported",
+                        "that file has no location on disk, so it cannot be read",
+                    );
+                    return;
+                };
+                let entries = match browsrl::import::read_file(&path) {
+                    Ok(entries) => entries,
+                    Err(error) => {
+                        let message = error.to_string();
+                        log_event(&format!("bookmark import failed: {message}"));
+                        tell(
+                            report_target.upgrade().as_ref(),
+                            "Bookmarks could not be imported",
+                            &message,
+                        );
+                        return;
+                    }
+                };
+                let report = browsrl::import::apply(&store.borrow(), &entries);
+                let summary = report.summary.to_string();
+                log_event(&format!("bookmark import: {summary}"));
+                tell(
+                    report_target.upgrade().as_ref(),
+                    "Bookmarks imported",
+                    &summary,
+                );
+            },
+        );
     }
 
     fn open_bookmarks(&self) {
@@ -958,6 +1033,16 @@ fn set_zoom(state: &PageRef, level: f64) {
     }
 }
 
+/// Say something in a dialog, because it is the answer to a question the person
+/// just asked and the status line is not where they are looking.
+fn tell(parent: Option<&impl IsA<gtk::Widget>>, heading: &str, body: &str) {
+    let dialog = adw::AlertDialog::new(Some(heading), Some(body));
+    dialog.add_response("close", "Close");
+    dialog.set_default_response(Some("close"));
+    dialog.set_close_response("close");
+    dialog.present(parent);
+}
+
 /// Quit through the application, so the windows close the way they do when a
 /// person closes them.
 ///
@@ -1012,6 +1097,7 @@ fn install_actions(application: &adw::Application, shell: &Shell) {
         ),
         ("restore-closed", &[], Shell::restore_closed),
         ("history", &["<Primary>h"], Shell::open_history),
+        ("import-bookmarks", &[], Shell::choose_bookmark_file),
         ("quit", &[], quit_application),
         ("readability", &[], Shell::toggle_readability),
         ("focus-address", &["<Primary>l"], Shell::focus_address),

@@ -324,6 +324,22 @@ def action_names() -> list[str]:
     return re.findall(r"'([^']+)'", result.stdout)
 
 
+def wait_for_no_instance(seconds: float = 20.0) -> bool:
+    """Wait until no browser owns the application name.
+
+    The shell is single-instance, so launching while a previous run's process is
+    still shutting down hands the new arguments to that one and exits: the run
+    then drives an instance it does not own, and fails somewhere unrelated a few
+    steps later. Waiting for the name to be unowned first removes that race.
+    """
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not action_names():
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def query(profile: pathlib.Path, sql: str) -> list[str]:
     connection = sqlite3.connect(f"file:{profile}/session.sqlite?mode=ro", uri=True)
     try:
@@ -572,6 +588,11 @@ def main() -> int:
         profile = pathlib.Path(profile_dir)
         first = f"{server.base_url}/one.html"
         second = f"{server.base_url}/two.html"
+        if not wait_for_no_instance():
+            raise SystemExit(
+                "another browser still owns the application name; refusing to start a"
+                " second one, because this run would drive an instance it does not own"
+            )
         browser = Browser(profile, first)
         try:
             time.sleep(3)
@@ -583,7 +604,7 @@ def main() -> int:
                 "previous-tab", "reload", "bookmark", "bookmarks", "history",
                 "focus-address", "copy-page-address", "readability",
                 "zoom-in", "zoom-out", "zoom-reset", "print", "restore-closed",
-                "clear-browsing-data", "quit",
+                "clear-browsing-data", "import-bookmarks", "quit",
             }
             registered = set(action_names())
             check(

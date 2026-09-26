@@ -1,0 +1,184 @@
+{
+  "checks": [
+    {
+      "details": {
+        "stored": {
+          "https://duplicate.example.com/": "Second copy, same URL",
+          "https://example.com/docs?a=1&b=2": "Docs & guides",
+          "https://intranet.example.com/dashboard": "Dashboard",
+          "https://intranet.example.com/deep/one": "One",
+          "https://intranet.example.com/deep/two": "Two",
+          "https://issues.example.com/": "Issues",
+          "https://news.example.org/": "News",
+          "https://no-title.example.com/": "Untitled bookmark",
+          "https://unfiled.example.net/": "Unfiled bookmark"
+        },
+        "summary_added": 9
+      },
+      "name": "import_reads_a_real_bookmark_file",
+      "passed": true
+    },
+    {
+      "details": {
+        "refused": 2,
+        "urls": [
+          "https://duplicate.example.com/",
+          "https://example.com/docs?a=1&b=2",
+          "https://intranet.example.com/dashboard",
+          "https://intranet.example.com/deep/one",
+          "https://intranet.example.com/deep/two",
+          "https://issues.example.com/",
+          "https://news.example.org/",
+          "https://no-title.example.com/",
+          "https://unfiled.example.net/"
+        ]
+      },
+      "name": "import_refuses_non_web_urls",
+      "passed": true
+    },
+    {
+      "details": {
+        "title": "Docs & guides"
+      },
+      "name": "import_decodes_html_entities",
+      "passed": true
+    },
+    {
+      "details": {
+        "duplicates": 1
+      },
+      "name": "import_collapses_a_duplicate_url",
+      "passed": true
+    },
+    {
+      "details": {
+        "sample_folders": {
+          "https://duplicate.example.com/": [],
+          "https://example.com/docs?a=1&b=2": [
+            "Reading list"
+          ],
+          "https://intranet.example.com/dashboard": [
+            "Work"
+          ],
+          "https://intranet.example.com/deep/one": [
+            "Work",
+            "Deep"
+          ],
+          "https://intranet.example.com/deep/two": [
+            "Work",
+            "Deep"
+          ],
+          "https://issues.example.com/": [
+            "Work"
+          ],
+          "https://news.example.org/": [
+            "Reading list"
+          ],
+          "https://unfiled.example.net/": []
+        }
+      },
+      "name": "import_keeps_folder_structure",
+      "passed": true
+    },
+    {
+      "details": {
+        "urls": [
+          "https://duplicate.example.com/",
+          "https://example.com/docs?a=1&b=2",
+          "https://intranet.example.com/dashboard",
+          "https://intranet.example.com/deep/one",
+          "https://intranet.example.com/deep/two",
+          "https://issues.example.com/",
+          "https://news.example.org/",
+          "https://no-title.example.com/",
+          "https://unfiled.example.net/"
+        ]
+      },
+      "name": "import_accepts_a_bookmark_with_no_title",
+      "passed": true
+    },
+    {
+      "details": {
+        "second_run": {
+          "added": 0,
+          "duplicates": 10,
+          "failed": 0,
+          "folders": 3,
+          "parsed": 12,
+          "refused": 2,
+          "sample_folders": {
+            "https://duplicate.example.com/": [],
+            "https://example.com/docs?a=1&b=2": [
+              "Reading list"
+            ],
+            "https://intranet.example.com/dashboard": [
+              "Work"
+            ],
+            "https://intranet.example.com/deep/one": [
+              "Work",
+              "Deep"
+            ],
+            "https://intranet.example.com/deep/two": [
+              "Work",
+              "Deep"
+            ],
+            "https://issues.example.com/": [
+              "Work"
+            ],
+            "https://news.example.org/": [
+              "Reading list"
+            ],
+            "https://unfiled.example.net/": []
+          },
+          "summary": "0 bookmark(s) added, 10 already present, 2 refused, 0 nested too deep, in 3 folder(s)",
+          "too_deep": 0
+        }
+      },
+      "name": "importing_twice_adds_nothing_new",
+      "passed": true
+    },
+    {
+      "details": {
+        "stderr": "import failed: no bookmarks were found; is this a browser's exported bookmarks file?"
+      },
+      "name": "import_refuses_a_file_with_no_bookmarks",
+      "passed": true
+    },
+    {
+      "details": {
+        "stderr": "import failed: could not read /tmp/browsrl-e2e-vk0hzjit/nope.html: No such file or directory (os error 2)"
+      },
+      "name": "import_reports_a_file_it_cannot_read",
+      "passed": true
+    },
+    {
+      "details": {
+        "stored": [
+          "https://example.com/docs?a=1&b=2",
+          "https://news.example.org/"
+        ],
+        "summary": {
+          "added": 2,
+          "duplicates": 0,
+          "failed": 0,
+          "folders": 1,
+          "parsed": 2,
+          "refused": 0,
+          "sample_folders": {
+            "https://example.com/docs?a=1&b=2": [
+              "Reading list"
+            ],
+            "https://news.example.org/": [
+              "Reading list"
+            ]
+          },
+          "summary": "2 bookmark(s) added, 0 already present, 0 refused, 0 nested too deep, in 1 folder(s)",
+          "too_deep": 0
+        }
+      },
+      "name": "import_survives_a_truncated_file",
+      "passed": true
+    }
+  ],
+  "passed": true
+}
