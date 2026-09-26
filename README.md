@@ -472,12 +472,10 @@ missing-homepage warning it used to raise is gone.
 
 ## The icon
 
-`assets/brwsl-128.png` is the project logo, 128×128, with a transparent
-background. It is made from the supplied JPEG: 90% of that image measured as
-near-white, which is the plate the mark was drawn on rather than part of the
-mark, so the white is cut out and the logo sits on whatever theme the desktop
-uses. A white square on a dark dock reads as a missing icon, which is the one
-thing an icon must not do.
+`assets/brwsl-128.png` is the project logo, 128×128, opaque, on the white
+background it was drawn on. It is the supplied JPEG scaled down, unchanged: the
+white is part of the artwork and stays, and the file carries no alpha channel at
+all, so a launcher cannot blend it with whatever is behind it.
 
 The file is the artwork, not a build product: `make packaging` checks that it is
 a 128×128 PNG and fails on a truncated or placeholder file, and nothing in the
