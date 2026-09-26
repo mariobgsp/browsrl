@@ -1,6 +1,6 @@
 @startuml
 !pragma layout smetana
-title Browsrl tab lifecycle (lazy WebView realization)
+title Brwsl tab lifecycle (lazy WebView realization)
 
 [*] --> Start : application activate
 Start --> Restoring : restore_session and stored rows exist
@@ -8,8 +8,8 @@ Start --> Placeholder : start URL or first tab
 Restoring --> Placeholder : create_page(url) per row
 
 state Placeholder {
-  [*] --> Toolbar
-  Toolbar : address, back/forward, reload\nno WebKit view yet
+  [*] --> PageArea
+  PageArea : page area and status line\nno WebKit view yet
 }
 
 Placeholder --> Realizing : tab selected
@@ -19,7 +19,7 @@ Loading --> Failed : page load error
 Ready --> Failed : address rejected by policy
 Failed --> Loading : corrected address
 Ready --> Ready : tab reselected, WebView kept alive
-Ready --> Loading : address entry or button
+Ready --> Loading : the window's address field or a button
 Ready --> Closing : close requested
 Loading --> Closing : close requested
 Closing --> Empty : it was the last remaining tab

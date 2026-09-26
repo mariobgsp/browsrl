@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic, offline end-to-end contract for the first Browsrl slice.
+"""Deterministic, offline end-to-end contract for the first Brwsl slice.
 
 Every check runs the real binary against loopback fixtures or explicit CLI
 input and asserts observable behaviour (exit code, JSON output, on-disk
@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import stat
+import subprocess
 import sys
 import tempfile
 
@@ -51,8 +52,56 @@ def rejection_message(stderr: str) -> str:
     return stderr.strip().removeprefix(SMOKE_PREFIX)
 
 
+def default_profile_check() -> dict[str, object]:
+    """The default profile directory: where it lands, and what it adopts.
+
+    This is the one place in the program where a path is chosen rather than
+    given, and it has been renamed twice. Both ways of getting it wrong are
+    checked here, offline, because one of them shipped: joining the name onto a
+    path that already carried it put the profile *inside* itself, and the browser
+    quietly carried an empty one while the real one sat beside it, which looked
+    exactly like losing everything.
+    """
+    with tempfile.TemporaryDirectory(prefix="brwsl-default-profile-") as data_home:
+        home = pathlib.Path(data_home)
+        previous = home / "browsrl"  # the first name this project had
+        previous.mkdir(parents=True)
+        (previous / "marker").write_text("kept", encoding="utf-8")
+        env = {**os.environ, "XDG_DATA_HOME": str(home)}
+        result = subprocess.run(
+            [str(BINARY), "--smoke"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+        current = home / "brwsl"
+        inside_itself = current / "brwsl"
+        marker_moved = (current / "marker").read_text(encoding="utf-8") == "kept"
+        return {
+            "name": "the_default_profile_is_the_profile_not_a_directory_inside_itself",
+            "passed": bool(
+                result.returncode == 0
+                and current.is_dir()
+                and marker_moved
+                and not previous.exists()
+                and not inside_itself.exists()
+            ),
+            "details": {
+                "returncode": result.returncode,
+                "profile_is_a_directory": current.is_dir(),
+                "previous_names_data_came_across": marker_moved,
+                "previous_name_is_gone": not previous.exists(),
+                "profile_inside_itself": inside_itself.exists(),
+                "under_data_home": sorted(p.name for p in home.iterdir()),
+            },
+        }
+
+
 def main() -> int:
     checks: list[dict[str, object]] = []
+    profile_check = default_profile_check()
+    checks.append(profile_check)
     with LocalFixtureServer() as server, temporary_profile() as profile_dir:
         profile = pathlib.Path(profile_dir)
         first_url = f"{server.base_url}/one.html"
@@ -281,8 +330,8 @@ def main() -> int:
     record(
         checks,
         "command_line_exit_codes",
-        help_result.stdout.startswith("Usage: browsrl")
-        and version_result.stdout.strip() == "browsrl 0.1.0"
+        help_result.stdout.startswith("Usage: brwsl")
+        and version_result.stdout.strip() == "brwsl 0.1.0"
         and unknown_result.stderr.startswith("unknown argument")
         and missing_value.stderr.strip() == "--profile-dir needs a path",
         {
@@ -303,7 +352,7 @@ def main() -> int:
     home = pathlib.Path.home()
     guard_cases = {
         "own_test_profile": [str(BINARY), "--profile-dir", str(temp / f"{PROFILE_PREFIX}abc")],
-        "personal_data_dir": [str(BINARY), "--profile-dir", str(home / ".local/share/browsrl")],
+        "personal_data_dir": [str(BINARY), "--profile-dir", str(home / ".local/share/brwsl")],
         "prefix_nested_deeper": [
             str(BINARY),
             "--profile-dir",
@@ -428,7 +477,7 @@ def main() -> int:
             "name": "workspace 3",
             "focused": True,
             "nodes": [
-                {"name": "a", "class": "io.github.browsrl.Browsrl", "focused": False, "nodes": []},
+                {"name": "a", "class": "io.github.brwsl.Brwsl", "focused": False, "nodes": []},
                 {"name": "b", "class": "alacritty", "focused": True, "nodes": []},
             ],
         },
@@ -456,7 +505,7 @@ def main() -> int:
         {"rule": focus_rule, "parsing": parsing, "application_id": gui.APPLICATION_ID},
     )
 
-    # The desktop entry is `Exec=browsrl %U`, so a link opened from another
+    # The desktop entry is `Exec=brwsl %U`, so a link opened from another
     # application arrives as a bare positional URL. The installed app used to
     # refuse exactly that, which broke every link pointed at it.
     positional = run_browser(

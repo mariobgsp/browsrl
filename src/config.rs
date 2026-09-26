@@ -83,7 +83,11 @@ impl Config {
             return Err(CliError::usage("XDG_DATA_HOME must be an absolute path"));
         }
 
-        let default_profile = data_home.join("browsrl");
+        // The whole path, name and all: this returns the profile directory
+        // itself, so joining the name on here as well put the profile inside
+        // itself - `brwsl/brwsl` - and the browser quietly carried an empty one
+        // while the real one sat beside it.
+        let default_profile = adopt_previous_profile(&data_home);
         let mut profile_dir = None;
         let mut database_path = None;
         let mut data_dir = None;
@@ -157,7 +161,7 @@ impl Config {
                 "-h" | "--help" => return Err(CliError::success(usage())),
                 "-V" | "--version" => {
                     return Err(CliError::success(format!(
-                        "browsrl {}",
+                        "brwsl {}",
                         env!("CARGO_PKG_VERSION")
                     )));
                 }
@@ -169,7 +173,7 @@ impl Config {
                 }
                 // A bare URL, because that is what the desktop entry promises to
                 // hand over and what every other browser accepts: the entry is
-                // `Exec=browsrl %U`, so a link opened from a chat client or a
+                // `Exec=brwsl %U`, so a link opened from a chat client or a
                 // file manager arrives as a plain positional argument. Treating it
                 // as an unknown flag made the installed app refuse every link
                 // pointed at it.
@@ -279,6 +283,54 @@ fn validate_search_endpoint(endpoint: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+/// The names this project's profile directory has been under, oldest first.
+///
+/// The project has been renamed twice, and the default profile directory was
+/// named after it each time. Every name is kept, because a person's bookmarks,
+/// history, saved session and cookie store are in whichever directory they were
+/// written to, and an app that quietly started on an empty profile would look
+/// like it had lost everything.
+const PREVIOUS_PROFILE_NAMES: [&str; 2] = ["browsrl", "brwsrl"];
+
+/// Move a profile directory from one of this project's previous names to its
+/// current one.
+///
+/// The rename happens only when a previous directory is there and the current one
+/// is not. Two profiles is not a thing to resolve by picking one, so when the
+/// current name already exists nothing moves and the older directory is left
+/// exactly where it is. Returns the profile directory to use either way, named.
+fn adopt_previous_profile(data_home: &Path) -> PathBuf {
+    let current = data_home.join("brwsl");
+    if current.exists() {
+        return current;
+    }
+    for name in PREVIOUS_PROFILE_NAMES {
+        let previous = data_home.join(name);
+        if !previous.is_dir() {
+            continue;
+        }
+        return match std::fs::rename(&previous, &current) {
+            Ok(()) => {
+                eprintln!(
+                    "profile renamed: {} -> {}",
+                    previous.display(),
+                    current.display()
+                );
+                current
+            }
+            Err(error) => {
+                eprintln!(
+                    "could not rename {} to {} ({error}); using an empty profile",
+                    previous.display(),
+                    current.display()
+                );
+                current
+            }
+        };
+    }
+    current
+}
+
 #[cfg(unix)]
 fn ensure_private_directory(path: &Path) -> Result<(), String> {
     std::fs::create_dir_all(path)
@@ -296,10 +348,10 @@ fn ensure_private_directory(path: &Path) -> Result<(), String> {
 
 pub fn usage() -> String {
     concat!(
-        "Usage: browsrl [URL] [--profile-dir PATH] [--database-path PATH] ",
+        "Usage: brwsl [URL] [--profile-dir PATH] [--database-path PATH] ",
         "[--data-dir PATH] [--cache-dir PATH] [--download-dir PATH] ",
         "[--start-url URL] [--search-endpoint URL] [--no-restore] ",
-        "[--smoke] [--storage-check]"
+        "[--import-bookmarks FILE] [--smoke] [--storage-check]"
     )
     .to_string()
 }

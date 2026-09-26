@@ -1,7 +1,7 @@
-//! Browsrl entry point: argument handling, the offline smoke path, and the
+//! Brwsl entry point: argument handling, the offline smoke path, and the
 //! native shell hand-off.
 
-use browsrl::{config::Config, downloads, import, navigation, storage};
+use brwsl::{config::Config, downloads, import, navigation, storage};
 use serde_json::json;
 
 #[cfg(feature = "webkit")]
@@ -55,14 +55,14 @@ fn main() {
 
     #[cfg(feature = "webkit")]
     if let Err(error) = gui::run(config) {
-        eprintln!("Browsrl: {error}");
+        eprintln!("Brwsl: {error}");
         std::process::exit(1);
     }
 
     #[cfg(not(feature = "webkit"))]
     {
         let _ = &config;
-        eprintln!("Browsrl was built without WebKit; use --smoke or --storage-check");
+        eprintln!("Brwsl was built without WebKit; use --smoke or --storage-check");
     }
 }
 

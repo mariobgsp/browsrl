@@ -20,7 +20,7 @@ PREFIX ?= /usr
 DESTDIR ?=
 BINDIR := $(DESTDIR)$(PREFIX)/bin
 DATADIR := $(DESTDIR)$(PREFIX)/share
-APP_ID := io.github.browsrl.Browsrl
+APP_ID := io.github.brwsl.Brwsl
 ASSETS := assets
 
 # The machine-checkable subset: everything that needs no renderer and no
@@ -101,7 +101,7 @@ check-desktop:
 	@desktop-file-validate $(ASSETS)/$(APP_ID).desktop && echo "desktop entry: valid"
 	@python3 -c "import xml.etree.ElementTree as E; E.parse('$(ASSETS)/$(APP_ID).metainfo.xml'); print('metainfo xml: well formed')"
 	@python3 -c "import struct; \
-		d=open('$(ASSETS)/browsrl-128.png','rb').read(); \
+		d=open('$(ASSETS)/brwsl-128.png','rb').read(); \
 		assert d[:8]==b'\\x89PNG\\r\\n\\x1a\\n', 'not a png'; \
 		w,h=struct.unpack('>II', d[16:24]); \
 		assert (w,h)==(128,128), f'icon is {w}x{h}, expected 128x128'; \
@@ -126,7 +126,7 @@ verify: $(GATE) packaging diagrams-check
 # A source archive, for handing the project to a machine without git. Built
 # from the same inputs the gate checks, and it refuses to include a stale
 # diagram or an unverified desktop entry by depending on the same targets.
-DIST_NAME := browsrl-$(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+DIST_NAME := brwsl-$(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 DIST_DIR := dist/$(DIST_NAME)
 
 dist: verify build-release
@@ -140,13 +140,13 @@ dist: verify build-release
 	@printf 'built %s\n' "dist/$(DIST_NAME).tar.gz"
 
 install: build-release
-	install -Dm755 target/release/browsrl $(BINDIR)/browsrl
+	install -Dm755 target/release/brwsl $(BINDIR)/brwsl
 	install -Dm644 $(ASSETS)/$(APP_ID).desktop \
 		$(DATADIR)/applications/$(APP_ID).desktop
 	install -Dm644 $(ASSETS)/$(APP_ID).metainfo.xml \
 		$(DATADIR)/metainfo/$(APP_ID).metainfo.xml
-	install -Dm644 $(ASSETS)/browsrl-128.png \
-		$(DATADIR)/icons/hicolor/128x128/apps/browsrl.png
+	install -Dm644 $(ASSETS)/brwsl-128.png \
+		$(DATADIR)/icons/hicolor/128x128/apps/brwsl.png
 	@# The files are in place, but a desktop environment will not show the entry
 	@# or find the icon until its caches are rebuilt, so "installed" has to include
 	@# this or the launcher stays empty. Both tools are optional: a system without
@@ -158,10 +158,10 @@ install: build-release
 	@echo "installed to $(DESTDIR)$(PREFIX)"
 
 uninstall:
-	rm -f $(BINDIR)/browsrl
+	rm -f $(BINDIR)/brwsl
 	rm -f $(DATADIR)/applications/$(APP_ID).desktop
 	rm -f $(DATADIR)/metainfo/$(APP_ID).metainfo.xml
-	rm -f $(DATADIR)/icons/hicolor/128x128/apps/browsrl.png
+	rm -f $(DATADIR)/icons/hicolor/128x128/apps/brwsl.png
 	@rmdir $(DATADIR)/icons/hicolor/128x128/apps $(DATADIR)/icons/hicolor/128x128 2>/dev/null || true
 	@command -v update-desktop-database >/dev/null 2>&1 && \
 		update-desktop-database "$(DATADIR)/applications" || true

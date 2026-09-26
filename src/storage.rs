@@ -293,12 +293,12 @@ fn is_allowed_url(value: &str) -> bool {
 }
 
 /// Turn a low-level SQLite failure into something a person can act on. The
-/// common one is a second process writing the same profile, which Browsrl
+/// common one is a second process writing the same profile, which Brwsl
 /// does not support: the GUI is single-instance through GApplication.
 fn describe_open_error(path: &Path, message: &str) -> String {
     if message.contains("locked") || message.contains("busy") {
         return format!(
-            "session database {} is in use by another Browsrl process; \
+            "session database {} is in use by another Brwsl process; \
              close it or use a different --profile-dir",
             path.display()
         );

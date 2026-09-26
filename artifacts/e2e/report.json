@@ -1,6 +1,20 @@
 {
-  "binary": "target/debug/browsrl",
+  "binary": "target/debug/brwsl",
   "checks": [
+    {
+      "details": {
+        "previous_name_is_gone": true,
+        "previous_names_data_came_across": true,
+        "profile_inside_itself": false,
+        "profile_is_a_directory": true,
+        "returncode": 0,
+        "under_data_home": [
+          "brwsl"
+        ]
+      },
+      "name": "the_default_profile_is_the_profile_not_a_directory_inside_itself",
+      "passed": true
+    },
     {
       "details": {
         "fixture_path": "/one.html",
@@ -197,7 +211,7 @@
           "temp_dir_itself": false,
           "traversal_out_of_temp": false
         },
-        "profile_prefix": "browsrl-e2e-",
+        "profile_prefix": "brwsl-e2e-",
         "verdicts": {
           "another_browser": false,
           "flag_without_value": false,
@@ -239,7 +253,7 @@
     },
     {
       "details": {
-        "application_id": "io.github.browsrl.Browsrl",
+        "application_id": "io.github.brwsl.Brwsl",
         "parsing": {
           "sway_finds_deep_focused_leaf": "alacritty",
           "sway_on_garbage_is_none": true,
@@ -259,7 +273,7 @@
         "flag_wins": "https://explicit.example/",
         "requested": "https://example.com/",
         "two_urls_code": 2,
-        "two_urls_error": "only one URL can be opened at a time, got a second: https://two.example/\n\nUsage: browsrl [URL] [--profile-dir PATH] [--d"
+        "two_urls_error": "only one URL can be opened at a time, got a second: https://two.example/\n\nUsage: brwsl [URL] [--profile-dir PATH] [--dat"
       },
       "name": "a_bare_url_is_accepted_like_every_other_browser",
       "passed": true

@@ -1,11 +1,11 @@
 @startuml
 !pragma layout smetana
-title Browsrl profile layout and privacy boundary
+title Brwsl profile layout and privacy boundary
 
 skinparam componentStyle rectangle
 skinparam shadowing false
 
-folder "PROFILE_DIR (default $XDG_DATA_HOME/browsrl)\nmode 0700, created on start" as Profile {
+folder "PROFILE_DIR (default $XDG_DATA_HOME/brwsl)\nmode 0700, created on start" as Profile {
   folder "data/ 0700\nWebKit website data" as Data
   folder "cache/ 0700\nWebKit disk cache" as Cache
   database "session.sqlite 0600\nsession_tabs: id, position, url, title, selected" as Session
@@ -13,7 +13,7 @@ folder "PROFILE_DIR (default $XDG_DATA_HOME/browsrl)\nmode 0700, created on star
 }
 
 package "Process boundaries" as Procs {
-  rectangle "browsrl UI\nno network client of its own" as UI
+  rectangle "brwsl UI\nno network client of its own" as UI
   rectangle "WebKitNetworkProcess\ncookies, TLS, cache" as Net
   rectangle "WebKitWebProcess\nsandboxed, renders pages" as Web
   rectangle "WebKitGPUProcess" as GPU

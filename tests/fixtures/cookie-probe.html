@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Brwsl cookie probe</title>
+  </head>
+  <body>
+    <h1>Cookie probe</h1>
+    <pre id="out">working</pre>
+    <script>
+      // Sets a cookie, then reports every cookie the page can see. A restart
+      // that keeps the cookie means the login session survives; a restart that
+      // reports nothing means the person is signed out again.
+      const name = "brwsl_probe";
+      const value = new URLSearchParams(location.search).get("v") || "sticky";
+      const report = (label, seen) => {
+        document.getElementById("out").textContent = label + ": " + (seen || "(none)");
+        fetch("/" + label + "-" + encodeURIComponent(seen || "none"), {
+          cache: "no-store",
+        }).catch(() => {});
+      };
+      const seen = document.cookie
+        .split(";")
+        .map((part) => part.trim())
+        .filter((part) => part.startsWith(name + "="))
+        .map((part) => part.slice(name.length + 1))
+        .join(",");
+      report("seen", seen);
+      if (!seen) {
+        document.cookie = name + "=" + value + "; path=/; max-age=86400";
+        report("set", document.cookie.includes(name + "=") ? value : "refused");
+      }
+    </script>
+  </body>
+</html>

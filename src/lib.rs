@@ -1,4 +1,4 @@
-//! Dependency-light core of Browsrl: configuration, the navigation boundary,
+//! Dependency-light core of Brwsl: configuration, the navigation boundary,
 //! and the local session store. The GTK/libadwaita/WebKit shell lives in the
 //! binary so the core can be exercised head-less by the smoke path.
 

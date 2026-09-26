@@ -1,0 +1,29 @@
+{
+  "checks": [
+    {
+      "details": {
+        "after_restart": {
+          "seen": "sticky",
+          "set": "sticky"
+        },
+        "first_run": {
+          "seen": "none",
+          "set": "sticky"
+        }
+      },
+      "name": "a_session_survives_closing_the_browser",
+      "passed": true
+    },
+    {
+      "details": {
+        "normal_run": {
+          "seen": "none",
+          "set": "sticky"
+        }
+      },
+      "name": "a_private_tab_can_be_opened_and_reported",
+      "passed": true
+    }
+  ],
+  "passed": true
+}

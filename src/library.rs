@@ -6,7 +6,7 @@
 //! opens it in the browsing window, so navigation still goes through the normal
 //! address policy.
 
-use browsrl::{bookmarks, history, storage};
+use brwsl::{bookmarks, history, storage};
 use gtk4 as gtk;
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -55,7 +55,9 @@ pub fn open(
     // of stacking copies, and quitting tears it down.
     let window = adw::Window::builder()
         .application(application)
-        .title(format!("Browsrl — {}", kind.title()))
+        // The same order the browsing window uses, so the two windows of one
+        // app title themselves the same way: what the window is, then the app.
+        .title(format!("{} — Brwsl", kind.title()))
         .default_width(560)
         .default_height(520)
         .build();
@@ -76,14 +78,18 @@ pub fn open(
     scroller.set_margin_start(12);
     scroller.set_margin_end(12);
 
+    // A panel is a window like any other here, so it is built the way the
+    // browsing window is built: a header bar on top, content below. Without one
+    // the window fell back to a plain title bar, which is a different visual
+    // language from the window the person just came from, and the panel's only
+    // control had nowhere to go but a strip under the list.
+    let header = adw::HeaderBar::new();
+    header.set_title_widget(Some(&adw::WindowTitle::new(kind.title(), "")));
+
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    root.append(&header);
     root.append(&scroller);
     if kind == LibraryKind::History {
-        let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        toolbar.set_margin_top(6);
-        toolbar.set_margin_bottom(6);
-        toolbar.set_margin_start(12);
-        toolbar.set_margin_end(12);
         let clear = gtk::Button::with_label("Clear history");
         let store_for_clear = store.clone();
         let list_for_clear = list.clone();
@@ -102,8 +108,10 @@ pub fn open(
                 &window_for_clear,
             );
         });
-        toolbar.append(&clear);
-        root.append(&toolbar);
+        // A destructive action keeps its word: the icons-not-words rule belongs
+        // to the navigation row, and this is the one control in a header that
+        // is about what it will lose.
+        header.pack_end(&clear);
     }
     window.set_content(Some(&root));
     window.present();

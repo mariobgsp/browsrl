@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GUI contract for Browsrl, driven through the window it really opens.
+"""GUI contract for Brwsl, driven through the window it really opens.
 
 WebKitGTK 6.0 cannot be driven by WebKitWebDriver, because a session needs the
 app to answer ``WebKitAutomationSession::create-web-view`` and the ``webkit6``
@@ -40,13 +40,13 @@ from harness import (
 
 
 REPORT = ROOT / "artifacts" / "e2e-gui" / "report.json"
-APPLICATION_ID = "io.github.browsrl.Browsrl"
-OBJECT_PATH = "/io/github/browsrl/Browsrl"
+APPLICATION_ID = "io.github.brwsl.Brwsl"
+OBJECT_PATH = "/io/github/brwsl/Brwsl"
 READY_SECONDS = 30
 
 # Names this harness's own log files, so they can be recognised and removed
 # without touching anything else in the temporary directory.
-LOG_PREFIX = "browsrl-gui-"
+LOG_PREFIX = "brwsl-gui-"
 
 
 def have_wtype() -> bool:
@@ -662,6 +662,54 @@ def main() -> int:
                 "ctrl_l_typing_and_enter_navigates",
                 navigated,
                 {"history": history, "expected_to_contain": second},
+            )
+
+            # The field offers the addresses this profile has been to, and it
+            # offers them to a person typing - never to the shell writing the field
+            # itself, which happens on every load, every tab switch and every
+            # navigation, and a popover opening on all of those would be
+            # unbearable. Both halves are observable in the log: what was offered,
+            # and when.
+            offers_before = browser.output().count("offering ")
+            # The harness refuses to type when the keyboard is not ours, and says
+            # so by returning False rather than by failing, so every step here is
+            # recorded: a check that reported "nothing was offered" when it had
+            # actually typed nothing would be worse than no check.
+            focused = wait_for_own_focus(seconds=8.0)
+            pressed = press("l", ctrl=True) if focused else False
+            time.sleep(0.5)
+            # The port is the part every address from this server shares, and the
+            # host is not: the server may be reached as 127.0.0.1 or as localhost
+            # depending on how it was bound, and only the port is in both.
+            typed = type_text(server.base_url.rsplit(":", 1)[-1]) if pressed else False
+            offered_while_typing = typed and wait_for(
+                lambda: browser.output().count("offering ") > offers_before,
+                seconds=15,
+            )
+            press("Escape")
+            time.sleep(0.5)
+            offers_after_escape = browser.output().count("offering ")
+            # A reload rewrites the field from the shell's side. Nothing may be
+            # offered for that.
+            activate("reload")
+            time.sleep(3)
+            offered_for_shells_write = (
+                browser.output().count("offering ") > offers_after_escape
+            )
+            check(
+                "the_field_offers_this_profiles_own_addresses",
+                offered_while_typing and not offered_for_shells_write,
+                {
+                    "history": query(profile, "SELECT url FROM history"),
+                    "app_log": browser.output()[-500:],
+                    "reads": browser.output().count("read ") ,
+                    "focused": focused,
+                    "ctrl_l_pressed": pressed,
+                    "typed": typed,
+                    "offers_while_typing": browser.output().count("offering ")
+                    - offers_before,
+                    "offers_for_a_shell_write": offered_for_shells_write,
+                },
             )
 
             # Reload has to reach the engine, which is observable as the page being

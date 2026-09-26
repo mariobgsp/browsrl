@@ -3,7 +3,7 @@ set -euo pipefail
 
 root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 committed_dir="$root_dir/diagrams"
-temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/browsrl-diagrams.XXXXXX")
+temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/brwsl-diagrams.XXXXXX")
 trap 'rm -rf "$temporary_dir"' EXIT
 
 DIAGRAM_OUTPUT_DIR="$temporary_dir" \

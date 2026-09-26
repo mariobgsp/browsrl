@@ -1,6 +1,6 @@
-# Browsrl
+# Brwsl
 
-Browsrl is an independent, local-first Linux browser shell written in Rust on
+Brwsl is an independent, local-first Linux browser shell written in Rust on
 top of GTK4, libadwaita, and WebKitGTK 6.0. It is an independent
 implementation in the spirit of the macOS browser
 [driceroland/Search](https://github.com/driceroland/Search); no upstream code is
@@ -8,8 +8,9 @@ vendored here, and this repository does not claim feature parity with it.
 
 This repository is an early but working slice: a real window with tabs, a strict
 navigation boundary, lazy WebView creation, private tabs, bookmarks, browsing
-history, keyboard shortcuts, and a local SQLite profile. Everything still
-missing is listed as deferred below rather than stubbed out.
+history, one address field that offers what this profile has already been to, and
+a local profile where a signed-in session survives closing the browser.
+Everything still missing is listed as deferred below rather than stubbed out.
 
 ## Features
 
@@ -17,30 +18,32 @@ missing is listed as deferred below rather than stubbed out.
 | --- | --- |
 | Tabs | Add, close, cycle with wrap-around, per-tab back/forward/reload, dense re-numbering, last tab resets instead of closing. The window title follows the page in front |
 | Navigation | Strict `http`/`https`/`about:blank` allowlist, bare hosts normalised to HTTPS, opt-in search |
+| Address field | One field for every tab, showing the tab in front and offering the addresses this profile has been to, most recent first, from its own history: never looked up, read at most once every thirty seconds, and never offered for the app's own writes to the field |
 | Privacy | Private tabs on an ephemeral network session: never restored, never bookmarked, never in history |
-| Bookmarks | Star toggle in the toolbar or `Ctrl+D`, deduplicated by URL, `file:` and other schemes refused. `Ctrl+Shift+I` imports another browser's exported bookmarks file through a file chooser |
+| Bookmarks | Star toggle in the window's bar or `Ctrl+D`, deduplicated by URL, `file:` and other schemes refused. `Ctrl+Shift+I` imports another browser's exported bookmarks file through a file chooser |
 | History | Written when WebKit reports a finished load, repeat visits collapsed, pruned to 5000 rows |
 | Downloads | Saved into `profile/downloads` as `0600`, server-supplied names reduced to a safe leaf, collisions numbered |
+| Sessions | A signed-in session survives closing the browser: cookies are kept in `data/cookies.txt` (`0600`, Netscape text format), because WebKit keeps them in memory unless a browser names the file. `Ctrl+Shift+Delete` deletes it, since clearing site data cannot reach a file of its own |
 | Readability | Per-tab pass that constrains measure, enlarges type and hides page chrome, applied as a user style sheet with no script injected |
-| Zoom | Per-tab, 50% to 300%, with the level shown in the toolbar |
+| Zoom | Per-tab, 50% to 300%, with the level shown in the window's bar |
 | Print | `Ctrl+P` opens the WebKit print dialog for the selected tab |
 | Closed tabs | `Ctrl+Shift+T` reopens the last closed tab, sixteen deep |
-| Library | Bookmark and history windows from the toolbar actions, with history clearing |
-| Site permissions | Every capability request is refused until it is answered: an `AdwAlertDialog` defaults to Deny, and dismissing it denies |
+| Library | Bookmark and history windows on `Ctrl+Shift+B` and `Ctrl+H`, with history clearing |
+| Site permissions | Every capability request is refused unless it is clicked through: the prompt is a window whose "Allow" control the keyboard cannot reach, so Return and Escape both refuse, and a deliberate click on "Allow" is the only way in |
 | Clear browsing data | `Ctrl+Shift+Delete` empties the history table and clears WebKit's cookies, storage and caches for the profile's session |
 | Load failures | A failed load names the URL and the error in the status line instead of leaving a blank page |
-| Crashed pages | A web process that dies is reported with the reason; the toolbar's reload control is an icon, not a word |
+| Crashed pages | A web process that dies is reported with the reason; the bar's reload control is an icon, not a word |
 | Session | Tabs and the selected tab restored on launch, saved on startup, on every tab switch, on tab close and on window close. A `quit` action closes cleanly, which is the only way the session is written on the way out |
 | Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Shift+T` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+Shift+B` `Ctrl+H` `Ctrl+Shift+R` `Ctrl++` `Ctrl+-` `Ctrl+0` `Ctrl+P` `Ctrl+C` `Ctrl+Shift+Delete` `Ctrl+Shift+I` `Ctrl+Shift+Q` |
 | Profile | One local directory, `0700`/`0600`, SQLite schema with in-place migration |
 
 ## Architecture
 
-![Browsrl module architecture](diagrams/architecture.svg)
+![Brwsl module architecture](diagrams/architecture.svg)
 
-![Browsrl tab lifecycle](diagrams/tab-lifecycle.svg)
+![Brwsl tab lifecycle](diagrams/tab-lifecycle.svg)
 
-![Browsrl profile and privacy boundary](diagrams/profile-and-privacy.svg)
+![Brwsl profile and privacy boundary](diagrams/profile-and-privacy.svg)
 
 PNG fallbacks are committed next to the SVGs: [architecture](diagrams/architecture.png),
 [tab lifecycle](diagrams/tab-lifecycle.png), and
@@ -49,6 +52,10 @@ PNG fallbacks are committed next to the SVGs: [architecture](diagrams/architectu
 `diagrams/profile-and-privacy.puml`.
 
 ### Source layout
+
+The visual rules - what a control is, how many bands stand between the window
+and the page, how a title reads, what user-facing copy may name - are in
+[DESIGN.md](DESIGN.md).
 
 | Path | Responsibility |
 | --- | --- |
@@ -61,7 +68,7 @@ PNG fallbacks are committed next to the SVGs: [architecture](diagrams/architectu
 | `src/downloads.rs` | Download destination policy: server-supplied names reduced to a safe leaf inside the profile. |
 | `src/readability.rs` | The per-tab readability style sheet. Not the engine's reader, which WebKitGTK 6.0 no longer exposes. |
 | `src/main.rs` | Process entry: arguments, the `--smoke` path, exit codes. |
-| `src/gui.rs` | `AdwApplication`, window, tab strip, `PageState`, the window's `WebContext`, and lazy `WebView` realization. |
+| `src/gui.rs` | `AdwApplication`, the window chrome (one bar carrying the tab strip and the window's controls, then the field row), the address field and the addresses it offers, the capability prompt, `PageState`, the window's `WebContext`, and lazy `WebView` realization. |
 
 The library half is deliberately free of GTK and WebKit so it can be checked
 head-less (`make check-core`) and exercised by the end-to-end contract without a
@@ -71,12 +78,13 @@ sessions, search endpoint) that every tab shares, so per-tab state stays in
 
 ### How a tab works
 
-1. `gui.rs` creates an `AdwTabPage` holding a toolbar and a placeholder label.
-   No WebKit object exists yet.
+1. `gui.rs` creates an `AdwTabPage` holding the page area, a placeholder label
+   and the status line. No WebKit object exists yet, and the bar that addresses
+   the page belongs to the window rather than to the tab.
 2. When the page is selected, `realize_page` creates a `WebView` bound to the
    tab's `WebKitNetworkSession` and starts the pending load.
-3. `LoadEvent::Finished` copies the final URI and title into the address entry
-   and the tab label.
+3. `LoadEvent::Finished` copies the final URI and title into the address field
+   and the tab label, but only while the tab is the one in front.
 4. A finished load updates the address entry, the tab title, the bookmark star,
    and (for normal tabs) the history store.
 5. Closing the window writes the normal tabs to SQLite in one transaction.
@@ -119,15 +127,16 @@ disabled and there is no flag that turns it off.
 
 ## Command line
 
-```
-Usage: browsrl [--profile-dir PATH] [--database-path PATH] [--data-dir PATH]
-               [--cache-dir PATH] [--start-url URL] [--search-endpoint URL]
-               [--no-restore] [--smoke]
+```text
+Usage: brwsl [URL] [--profile-dir PATH] [--database-path PATH] [--data-dir PATH]
+               [--cache-dir PATH] [--download-dir PATH] [--start-url URL]
+               [--search-endpoint URL] [--no-restore] [--import-bookmarks FILE]
+               [--smoke] [--storage-check]
 ```
 
 | Flag | Meaning |
 | --- | --- |
-| `--profile-dir` | Profile root; defaults to `$XDG_DATA_HOME/browsrl`. |
+| `--profile-dir` | Profile root; defaults to `$XDG_DATA_HOME/brwsl`. |
 | `--database-path`, `--data-dir`, `--cache-dir` | Override individual paths inside the profile. |
 | `--start-url` | URL for the first tab; defaults to `about:blank`. |
 | `[URL]` | A single URL to open, exactly like every other browser. This is what the desktop entry's `%u` hands over when a link is opened from another application. One link at a time: a second URL is refused with a message rather than silently ignored, and the entry asks for `%u` rather than `%U` so it never promises more than the app delivers. A URL given at launch is **not** swallowed by a saved session: the session is restored and the URL opens on top of it, selected, the way the other browsers behave. |
@@ -141,7 +150,7 @@ Usage: browsrl [--profile-dir PATH] [--database-path PATH] [--data-dir PATH]
 Exit codes: `0` for success and for `--help`/`--version`, `1` for a failed
 startup or smoke check, `2` for a malformed invocation.
 
-Browsrl is single-instance: a second launch becomes a tab in the first window,
+Brwsl is single-instance: a second launch becomes a tab in the first window,
 so two processes never write the same profile. If a session database is held by
 another process anyway, startup fails with an explicit message rather than a
 bare SQLite error.
@@ -157,12 +166,16 @@ the shell can never become an accidental search relay to a third party.
 
 ## Profile and session data
 
-The profile holds `session.sqlite` (`0600`) plus `data/` and `cache/`
-directories (`0700`), and every one of them is created or re-hardened at
-startup. SQLite's `-wal` and `-shm` sidecars carry the same URLs and titles as
+The profile is `$XDG_DATA_HOME/brwsl` unless `--profile-dir` says otherwise, and
+it holds `session.sqlite` (`0600`) plus `data/` and `cache/` directories (`0700`),
+and every one of them is created or re-hardened at startup. The project has been
+renamed twice, so a profile left under either earlier name is adopted on the first
+launch rather than abandoned — a rename that quietly started on an empty profile
+would look exactly like losing every bookmark. SQLite's `-wal` and `-shm` sidecars carry the same URLs and titles as
 the database and are created with the process umask, so they are re-hardened to
 `0600` as well. Cookies and site data stay inside WebKit's own storage under
-`data/`. Nothing is written outside the profile directory, and no global GTK,
+`data/`, and the cookie store is `data/cookies.txt` — a file, `0600`, that
+`Ctrl+Shift+Delete` removes. Nothing is written outside the profile directory, and no global GTK,
 desktop, or OpenCode configuration is touched.
 
 ## Verification
@@ -197,8 +210,9 @@ and asserts observable behaviour: SQLite round-trip, session restore, rejection
 of non-web and look-alike input (`file:`, `javascript:`, `data:`, `HTTP://`,
 `//host`, `about:config`) against their exact messages, bare-host normalization,
 search requiring an explicit endpoint, the `https`-only endpoint policy, the CLI
-exit-code contract, and permission hardening that starts from a deliberately
-world-readable profile. It needs no Internet access.
+exit-code contract, that the default profile directory is the profile and not a
+directory inside itself, and permission hardening that starts from a
+deliberately world-readable profile. It needs no Internet access.
 
 The permission check is mutation-tested: with the hardening disabled it fails on
 `session.sqlite` remaining `0666` while every other check still passes, so it is
@@ -212,7 +226,7 @@ not by the automated contract. Serve a fixture and start the browser:
 ```sh
 make build
 (cd tests/fixtures && python3 -m http.server 8123 --bind 127.0.0.1 &)
-./target/debug/browsrl --profile-dir "$(mktemp -d)" \
+./target/debug/brwsl --profile-dir "$(mktemp -d)" \
     --start-url http://127.0.0.1:8123/one.html
 ```
 
@@ -350,7 +364,7 @@ rest: a bookmark file is often the only copy of that list a person has.
 
 Everything is counted rather than reported as a single yes:
 
-```
+```json
 {"added":9,"duplicates":1,"refused":2,"too_deep":0,"failed":0,"folders":3,"parsed":12}
 ```
 
@@ -374,9 +388,11 @@ mutation-tested: never popping the folder stack makes it fail.
 * There is no telemetry, account, sync, remote history, or update client in this
   slice, and no code path that would add one. The shell opens no sockets of its
   own: every request goes through the WebKit network process.
-* A capability request — camera, microphone, screen, location — is refused until
-  it is answered. The dialog opens on Deny, closing it denies, and the answer is
-  not remembered, so a site has to ask again.
+* A capability request — camera, microphone, screen, location — is refused unless
+  it is clicked through. The prompt is a window whose "Allow" control the keyboard
+  cannot reach, so Return and Escape both refuse, and dismissing it refuses: a
+  grant takes a deliberate click and nothing else. The answer is not remembered,
+  so a site has to ask again.
 * Wayland is preferred by the native GTK stack, with the GTK X11 fallback.
 * Video and audio depend entirely on the GStreamer plugins WebKitGTK finds on the
   machine, and the failure is harsh: with no audio sink, WebKitGTK 6.0 reports
@@ -399,7 +415,7 @@ Deliberately not implemented:
 | Reader-mode extraction | The readability pass restyles a page; it does not extract an article the way a reader engine would |
 | Find in page | `webkit_web_view_find_*` does not exist in WebKitGTK 6.0; there is no typed binding to call |
 | Save page | Needs the same removed find/serialisation surface, or an injected script that the 6.0 bindings also lack |
-| Tab reordering by drag, tear-off windows, closed-tab restore | Not implemented |
+| Tab reordering by drag, tear-off windows | Not implemented |
 | Content blocking | Not implemented |
 | Per-site permission memory | A capability request is asked about every time and refused by default, but the answer is not remembered per site: there is no allow or deny list to store, and `PermissionRequest` exposes no URI to key one on |
 | Engine-side navigation policy | The address bar refuses anything outside `http`, `https` and `about:blank`, but a page's *own* navigation cannot be held to the same rule: `WebKitWebView::decide-policy` in WebKitGTK 6.0 carries only a `PolicyDecision` and a decision type, with no `NavigationAction` and therefore no URI to judge, and the only signal carrying a `NavigationAction` is `create` for new windows. WebKit's own restrictions still apply to what a page may load |
@@ -410,14 +426,14 @@ functional superset of the macOS browser it is inspired by.
 
 ## Distributing
 
-`make dist` builds `dist/browsrl-<version>.tar.gz` after the gate, the packaging
+`make dist` builds `dist/brwsl-<version>.tar.gz` after the gate, the packaging
 checks and the diagram freshness check have all passed, so an archive can never
 carry a stale diagram or an unvalidated desktop entry. It is a source tarball
 with no `.git`, and it builds on its own:
 
 ```sh
 make dist
-tar xzf dist/browsrl-0.1.0.tar.gz -C /tmp && cd /tmp/browsrl-0.1.0 && cargo build
+tar xzf dist/brwsl-0.1.0.tar.gz -C /tmp && cd /tmp/brwsl-0.1.0 && cargo build
 ```
 
 ## Installing
@@ -437,44 +453,45 @@ Installing is what makes the app *findable*: the entry lands in
 rebuilds the desktop-entry database and the icon cache afterwards, because a
 desktop environment shows neither until those caches are refreshed. With
 `PREFIX=$HOME/.local` no root is needed, and `~/.local/bin` is on the session
-`PATH`, so the `Exec=browsrl %u` line resolves for a launcher-started app. After
-installing, the app appears in the application launcher under **Browsrl** and
+`PATH`, so the `Exec=brwsl %u` line resolves for a launcher-started app. After
+installing, the app appears in the application launcher under **Brwsl** and
 opens with its icon.
 
-The first run creates its profile at `$XDG_DATA_HOME/browsrl` — a fresh profile,
+The first run creates its profile at `$XDG_DATA_HOME/brwsl` — a fresh profile,
 not the old `rbrowse` directory.
 
-The desktop entry registers the `http` and `https` handlers, so Browsrl can
+The desktop entry registers the `http` and `https` handlers, so Brwsl can
 open links handed to it by other applications, one link at a time. Installing
 does **not** make it the default browser: that is
-`xdg-settings set default-web-browser io.github.browsrl.Browsrl.desktop`, and it
+`xdg-settings set default-web-browser io.github.brwsl.Brwsl.desktop`, and it
 is left to you on purpose, since taking over link handling is not something an
 installer should do behind your back. `make packaging` validates the entry with
-`desktop-file-validate` and the metadata with `appstreamcli`; the one accepted
-AppStream warning is the missing project homepage, because this repository has
-no public URL yet.
+`desktop-file-validate` and the metadata with `appstreamcli`, and fails only on
+an `E:` line. The metadata carries the project's homepage and author, so the
+missing-homepage warning it used to raise is gone.
 
 ## The icon
 
-`assets/browsrl-128.png` is a lowercase Latin `b` in a slab-serif letterform,
-drawn as pixels: a stem with a top serif, a bowl on the lower right, and a
-bottom serif. It is black on white, 128×128, with no anti-aliasing at all — the
-file contains exactly two colours and no grey pixels, so the edges stay square at
-any size a launcher picks.
+`assets/brwsl-128.png` is the project logo, 128×128, with a transparent
+background. It is made from the supplied JPEG: 90% of that image measured as
+near-white, which is the plate the mark was drawn on rather than part of the
+mark, so the white is cut out and the logo sits on whatever theme the desktop
+uses. A white square on a dark dock reads as a missing icon, which is the one
+thing an icon must not do.
 
-It is generated, not drawn by hand in an editor, so it can be changed as text:
+The file is the artwork, not a build product: `make packaging` checks that it is
+a 128×128 PNG and fails on a truncated or placeholder file, and nothing in the
+build regenerates it.
 
 ```sh
-python3 scripts/make-icon.py --preview          # see the glyph in the terminal
-python3 scripts/make-icon.py assets/browsrl-128.png
-make packaging                                  # validates it is a 128x128 PNG
+make packaging                                  # validates the desktop entry, metadata and icon
 ```
 
-The glyph is a character grid at the top of `scripts/make-icon.py`; edit those
-rows and re-run. The renderer trims to the ink, picks the largest whole-pixel
-scale that leaves a margin, and centres the result, so a grid with uneven empty
-borders still comes out centred. `make packaging` checks the magic bytes *and*
-the dimensions, so a truncated or placeholder icon fails the build.
+`scripts/make-icon.py` is the *earlier* generator: it draws a lowercase Latin `b`
+as a pixel grid, and running it over `assets/brwsl-128.png` replaces the logo with
+that glyph. It is kept for reference and the grid is still editable, so if the
+pixel letterform is ever wanted back, run it deliberately — and re-check the
+icon afterwards.
 
 ## PlantUML assets
 

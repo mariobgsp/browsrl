@@ -1,19 +1,19 @@
 @startuml
 !pragma layout smetana
-title Browsrl module architecture (first slice)
+title Brwsl module architecture (first slice)
 
 skinparam componentStyle rectangle
 skinparam shadowing false
 
 actor User
 
-package "browsrl binary (feature = webkit)" as Shell {
+package "brwsl binary (feature = webkit)" as Shell {
   rectangle "main.rs\nargv parsing, smoke path, exit codes" as Main
   rectangle "gui.rs\nAdwApplication, window, AdwTabView, PageState" as Gui
   rectangle "WebView\nrealized on first selection,\nrenders pages for the user" as WebView
 }
 
-package "browsrl library (no GUI deps)" as Core {
+package "brwsl library (no GUI deps)" as Core {
   rectangle "config\nCLI + profile paths + permissions" as Config
   rectangle "navigation\nURL and search policy" as Navigation
   rectangle "storage\nSQLite schema + migration" as Storage

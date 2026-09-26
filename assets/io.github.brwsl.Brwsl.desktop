@@ -1,13 +1,13 @@
 [Desktop Entry]
 Type=Application
-Name=Browsrl
+Name=Brwsl
 GenericName=Web Browser
 Comment=A small local-first browser shell for GTK desktops
-Exec=browsrl %u
-Icon=browsrl
+Exec=brwsl %u
+Icon=brwsl
 Terminal=false
 Categories=Network;WebBrowser;
 Keywords=web;browser;internet;
 StartupNotify=true
-StartupWMClass=io.github.browsrl.Browsrl
+StartupWMClass=io.github.brwsl.Brwsl
 MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;

@@ -1,7 +1,7 @@
 //! GTK4/libadwaita/WebKitGTK shell: window, tab strip, and lazy page realization.
 
 use crate::library::{self, LibraryKind};
-use browsrl::{config::Config, downloads, navigation, readability, storage};
+use brwsl::{config::Config, downloads, navigation, readability, storage};
 use gtk4 as gtk;
 use gtk4::glib;
 use gtk4::glib::Propagation;
@@ -141,7 +141,7 @@ fn watch_one_download(
     });
 }
 
-pub const APPLICATION_ID: &str = "io.github.browsrl.Browsrl";
+pub const APPLICATION_ID: &str = "io.github.brwsl.Brwsl";
 
 type PageRef = Rc<PageState>;
 type NetworkHandle = Rc<NetworkSession>;
@@ -178,7 +178,6 @@ struct Browser {
 struct PageState {
     content: gtk::Box,
     placeholder: gtk::Label,
-    address: gtk::Entry,
     status: gtk::Label,
     url: RefCell<String>,
     title: RefCell<String>,
@@ -187,10 +186,6 @@ struct PageState {
     network: NetworkHandle,
     context: Rc<WebContext>,
     view: RefCell<Option<WebView>>,
-    /// Toolbar button that reflects and toggles the bookmark state.
-    bookmark: gtk::Button,
-    /// Toolbar button that reflects and toggles the readability pass.
-    readable: gtk::Button,
     /// Whether this tab is showing the readability stylesheet.
     readable_on: Cell<bool>,
     /// Weak window handle, so dialogs parent to the window without keeping it
@@ -201,8 +196,6 @@ struct PageState {
     tab_view: glib::WeakRef<adw::TabView>,
     /// Per-tab zoom level, kept here so switching tabs restores it.
     zoom: Cell<f64>,
-    /// Label showing the zoom percentage, kept in step with `zoom`.
-    zoom_label: gtk::Label,
     /// Per-tab content manager; the sheet is added to and removed from it.
     readable_manager: webkit6::UserContentManager,
     readable_sheet: RefCell<Option<webkit6::UserStyleSheet>>,
@@ -225,6 +218,8 @@ struct Shell {
     browser: Browser,
     /// Recently closed normal tabs, newest last.
     closed: Rc<RefCell<std::collections::VecDeque<(String, String)>>>,
+    /// The window's own controls, which every action in the shell acts through.
+    chrome: Chrome,
 }
 
 /// How many closed tabs can be reopened.
@@ -255,7 +250,7 @@ impl Shell {
         );
         self.states.borrow_mut().push(state.clone());
         self.tab_view.set_selected_page(&page);
-        realize_page(&state);
+        realize_page(&state, &self.chrome);
     }
 
     /// Open a URL in the selected tab, reporting a rejection in its status line.
@@ -263,7 +258,13 @@ impl Shell {
         let Some(state) = self.selected() else {
             return;
         };
-        if let Err(error) = navigate_state(&state, input, self.browser.search_endpoint.as_deref()) {
+        if let Err(error) = navigate_state(
+            &state,
+            input,
+            self.browser.search_endpoint.as_deref(),
+            &self.chrome.address,
+            &self.chrome.suggestions,
+        ) {
             self.note(&state, &error);
         }
     }
@@ -273,7 +274,7 @@ impl Shell {
         let Some(state) = self.selected() else {
             return;
         };
-        toggle_bookmark(&state, &self.browser.store);
+        toggle_bookmark(&state, &self.browser.store, &self.chrome.bookmark);
     }
 
     /// Reflect the bookmark state of a tab after a page load.
@@ -284,7 +285,22 @@ impl Shell {
         } else {
             self.store.borrow().is_bookmarked(&url).unwrap_or(false)
         };
-        set_bookmark_icon(state, bookmarked);
+        set_bookmark_icon(&self.chrome.bookmark, bookmarked);
+    }
+
+    /// Bring the window's own controls in line with the tab in front.
+    ///
+    /// The field, the percentage, the star and the reading mark belong to the
+    /// window, and each of them shows the tab someone is looking at, so they are
+    /// written whenever the front tab changes and not only when a control is used.
+    fn sync_chrome(&self, state: &PageRef) {
+        self.chrome
+            .suggestions
+            .write(&self.chrome.address, &current_state_url(state));
+        let percent = (state.zoom.get() * 100.0).round() as i64;
+        self.chrome.zoom_label.set_text(&format!("{percent}%"));
+        set_readability_icon(&self.chrome.readable, state.readable_on.get());
+        self.refresh_bookmark(state);
     }
 
     fn close_selected(&self) {
@@ -357,14 +373,14 @@ impl Shell {
         let Some(state) = self.selected() else {
             return;
         };
-        set_zoom(&state, state.zoom.get() + steps);
+        set_zoom(&state, state.zoom.get() + steps, &self.chrome.zoom_label);
     }
 
     fn reset_zoom(&self) {
         let Some(state) = self.selected() else {
             return;
         };
-        set_zoom(&state, 1.0);
+        set_zoom(&state, 1.0, &self.chrome.zoom_label);
     }
 
     /// Open the print dialog for the selected tab, parented to the window.
@@ -397,7 +413,7 @@ impl Shell {
         );
         self.states.borrow_mut().push(state.clone());
         self.tab_view.set_selected_page(&page);
-        realize_page(&state);
+        realize_page(&state, &self.chrome);
     }
 
     fn remember_closed(&self, url: String, title: String) {
@@ -444,6 +460,13 @@ impl Shell {
                 Err(error) => eprintln!("clearing site data failed: {error}"),
             },
         );
+        // Clearing site data leaves the cookie file alone, because the cookie
+        // store is a file of its own rather than part of the data manager's
+        // directories. Without this, the next launch would sign the person back
+        // in to exactly what they just erased.
+        if let Some(dir) = manager.base_data_directory() {
+            let _ = std::fs::remove_file(PathBuf::from(dir.to_string()).join("cookies.txt"));
+        }
         self.report(&format!(
             "cleared {history_removed} history entries and site data"
         ));
@@ -505,7 +528,7 @@ impl Shell {
                     );
                     return;
                 };
-                let entries = match browsrl::import::read_file(&path) {
+                let entries = match brwsl::import::read_file(&path) {
                     Ok(entries) => entries,
                     Err(error) => {
                         let message = error.to_string();
@@ -518,7 +541,7 @@ impl Shell {
                         return;
                     }
                 };
-                let report = browsrl::import::apply(&store.borrow(), &entries);
+                let report = brwsl::import::apply(&store.borrow(), &entries);
                 let summary = report.summary.to_string();
                 log_event(&format!("bookmark import: {summary}"));
                 tell(
@@ -553,15 +576,13 @@ impl Shell {
     }
 
     fn focus_address(&self) {
-        if let Some(state) = self.selected() {
-            state.address.grab_focus();
-            state.address.select_region(0, -1);
-        }
+        self.chrome.address.grab_focus();
+        self.chrome.address.select_region(0, -1);
     }
 
     fn toggle_readability(&self) {
         if let Some(state) = self.selected() {
-            toggle_readability(&state);
+            toggle_readability(&state, &self.chrome.readable);
         }
     }
 
@@ -570,7 +591,7 @@ impl Shell {
             return;
         };
         let url = current_state_url(&state);
-        state.address.clipboard().set_text(&url);
+        self.chrome.address.clipboard().set_text(&url);
         self.note(&state, "Address copied");
     }
 }
@@ -578,7 +599,11 @@ impl Shell {
 /// Add or remove the bookmark for a tab, reporting the outcome in its status
 /// line. Shared by the toolbar button and the Ctrl+D action so both behave
 /// identically, including the refusals for private and blank tabs.
-fn toggle_bookmark(state: &PageRef, store: &Rc<RefCell<storage::SessionStore>>) {
+fn toggle_bookmark(
+    state: &PageRef,
+    store: &Rc<RefCell<storage::SessionStore>>,
+    button: &gtk::Button,
+) {
     if state.mode == TabMode::Private {
         state.status.set_text("Private tabs are not bookmarked");
         return;
@@ -601,11 +626,11 @@ fn toggle_bookmark(state: &PageRef, store: &Rc<RefCell<storage::SessionStore>>) 
     };
     match outcome {
         Ok(true) => {
-            set_bookmark_icon(state, true);
+            set_bookmark_icon(button, true);
             state.status.set_text("Bookmarked");
         }
         Ok(false) => {
-            set_bookmark_icon(state, false);
+            set_bookmark_icon(button, false);
             state.status.set_text("Bookmark removed");
         }
         Err(error) => state.status.set_text(&format!("bookmark failed: {error}")),
@@ -616,10 +641,10 @@ fn toggle_bookmark(state: &PageRef, store: &Rc<RefCell<storage::SessionStore>>) 
 ///
 /// The stylesheet is attached to a per-tab content manager, so no script runs
 /// in the page and no other tab is affected.
-fn toggle_readability(state: &PageRef) {
+fn toggle_readability(state: &PageRef, button: &gtk::Button) {
     let next = !state.readable_on.get();
     state.readable_on.set(next);
-    set_readability_icon(state, next);
+    set_readability_icon(button, next);
     apply_readability_sheet(state);
     state.status.set_text(if next {
         "Readability pass on"
@@ -651,39 +676,444 @@ fn apply_readability_sheet(state: &PageRef) {
     }
 }
 
-fn set_readability_icon(state: &PageRef, on: bool) {
-    state.readable.set_icon_name(if on {
+fn set_readability_icon(button: &gtk::Button, on: bool) {
+    button.set_icon_name(if on {
         "view-reading-mode-checked-symbolic"
     } else {
         "view-reading-mode-symbolic"
     });
-    state.readable.set_tooltip_text(Some(if on {
+    button.set_tooltip_text(Some(if on {
         "Turn off the readability pass (Ctrl+Shift+R)"
     } else {
         "Apply the readability pass (Ctrl+Shift+R)"
     }));
 }
 
-/// Wire the zoom buttons to the tab they belong to, so a shortcut and a click
-/// take exactly the same path.
-fn connect_zoom_buttons(
-    state: &PageRef,
-    out: &gtk::Button,
-    into: &gtk::Button,
-    label: &gtk::Label,
-) {
-    for (button, steps) in [(out, -ZOOM_STEP), (into, ZOOM_STEP)] {
-        let weak: Weak<PageState> = Rc::downgrade(state);
-        button.connect_clicked(move |_| {
-            let Some(state) = weak.upgrade() else {
-                return;
-            };
-            set_zoom(&state, state.zoom.get() + steps);
-        });
+/// The window's own controls, and the one field every tab shares.
+///
+/// Each of these acts on whichever tab is in front, which is why they belong to
+/// the window rather than to a tab: the field shows that tab's address, the
+/// back button moves that tab's history, the star reflects that tab's bookmark
+/// and the percentage is that tab's zoom.
+/// How many past addresses the field is willing to offer.
+///
+/// The history table holds five thousand rows, and offering all of them is not
+/// helpful: eight or so good ones is a list a person can read, and a thousand is
+/// a list to scroll past. The most recent few hundred are the ones anybody is
+/// likely to want anyway.
+const SUGGESTION_LIMIT: i64 = 500;
+
+/// How many rows are shown at once.
+const SUGGESTION_ROWS: usize = 8;
+
+/// How long before the addresses are read again, in microseconds.
+const SUGGESTION_READ_INTERVAL: i64 = 30 * 1_000_000;
+
+/// What a picked address should do: go there.
+type Navigate = Rc<dyn Fn(&str)>;
+
+/// What the field is offering: where the addresses come from, what is on show,
+/// and which row the keyboard is on.
+///
+/// The matching is done here rather than by a completion widget, because the
+/// obvious one only matches the start of a string, and a person types "youtu"
+/// where the address is "https://www.youtube.com/". The candidates are read in
+/// one go, at most every half minute, so typing costs no queries per letter.
+struct Suggestions {
+    /// Every address the profile has been to, most recent first, deduplicated.
+    candidates: RefCell<Vec<String>>,
+    /// Indexes into `candidates` for the rows on show, in the order shown.
+    shown: RefCell<Vec<usize>>,
+    /// The row the keyboard is on, if any. None means the typed text stands on
+    /// its own, which is what Return navigates.
+    cursor: Cell<Option<usize>>,
+    /// The text the shell last wrote into the field, if it was the shell.
+    ///
+    /// The field is written by the shell as well as typed into - a tab
+    /// switching, a page finishing a load, a navigation, a suggestion being
+    /// taken - and none of those is somebody asking for suggestions, so rows that
+    /// opened on every page load would be unbearable. Neither the focus nor
+    /// the keyboard can tell the two apart here: on Wayland the field reports no
+    /// focus while it is being filled, and the characters arrive as text rather
+    /// than as key presses. So the shell marks its own writes here, and a change
+    /// that matches the mark is the shell talking to itself.
+    written: Cell<Option<String>>,
+    /// Whether the field is the thing being typed into right now.
+    ///
+    /// The arrow keys that walk the rows and the Escape that puts them away are
+    /// taken from the field, and only while it is the subject: with this false
+    /// every key passes on, so a page keeps its own arrow keys and its Escape. It
+    /// is set from the field's own changes and cleared as soon as the field stops
+    /// being the subject - when the shell writes it, and when the rows go away.
+    active: Cell<bool>,
+    /// When the addresses were last read, in monotonic microseconds.
+    read_at: Cell<i64>,
+    /// What to do with an address a person picked. Set by the window once it
+    /// exists, because the shell that navigates is built after the chrome is.
+    navigate: RefCell<Option<Navigate>>,
+    /// This, for the closures the rows carry.
+    me: RefCell<Weak<Suggestions>>,
+    /// The rows, in a band of the window between the field and the page.
+    rows: gtk::Box,
+    /// The label of each row on show, so the one the keyboard is on can be marked.
+    labels: RefCell<Vec<gtk::Label>>,
+}
+
+impl Suggestions {
+    /// Re-read the addresses this profile has been to, if it is due.
+    ///
+    /// A read that fails leaves the previous list alone rather than emptying it
+    /// under a person who is halfway through typing.
+    fn refresh_if_due(&self, store: &Rc<RefCell<storage::SessionStore>>) {
+        // An empty list is read straight away, however recently it was read. The
+        // throttle is there to stop a query per letter, and it must not also stop
+        // the list from ever being filled: the first time the field is used in a
+        // window is often before anything has been visited, and a read at that
+        // moment returns nothing, and thirty seconds of nothing offered would look
+        // exactly like a broken field.
+        let now = glib::monotonic_time();
+        let last = self.read_at.get();
+        let empty = self.candidates.borrow().is_empty();
+        if !empty && last != 0 && now.saturating_sub(last) < SUGGESTION_READ_INTERVAL {
+            return;
+        }
+        self.read_at.set(now);
+        let Ok(entries) = store.borrow().history(SUGGESTION_LIMIT) else {
+            return;
+        };
+        let mut seen = HashSet::new();
+        let urls: Vec<String> = entries
+            .into_iter()
+            .map(|entry| entry.url)
+            .filter(|url| seen.insert(url.clone()))
+            .collect();
+        // Reading them is worth a line of its own: a field that offers nothing
+        // and a field that was never given anything look identical from outside.
+        log_event(&format!(
+            "read {} addresses from this profile's history",
+            urls.len()
+        ));
+        *self.candidates.borrow_mut() = urls;
     }
+
+    /// Work out what the typed text offers, and show it if anything does.
+    fn update(&self, typed: &str, store: &Rc<RefCell<storage::SessionStore>>) {
+        // The mark is always cleared, so a shell write that produced no change of
+        // its own cannot swallow a later keystroke. The one thing it can swallow
+        // is a person retyping exactly what the shell just put there, which costs
+        // one missing set of rows.
+        let written = self.written.take();
+        if needle_is_shells(typed, written.as_deref()) {
+            self.hide();
+            return;
+        }
+        self.active.set(true);
+        // Two letters at least: a one-letter set of rows is a list of everything,
+        // which is noise, and it covers the page before anybody has said
+        // anything.
+        let needle = typed.trim().to_lowercase();
+        if needle.chars().count() < 2 {
+            self.hide();
+            return;
+        }
+        self.refresh_if_due(store);
+        let candidates = self.candidates.borrow();
+        let shown: Vec<usize> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, url)| url.to_lowercase().contains(&needle))
+            .map(|(index, _)| index)
+            .take(SUGGESTION_ROWS)
+            .collect();
+        drop(candidates);
+        if shown.is_empty() {
+            // Worth saying out loud: a field that offers nothing and a field that
+            // was never asked are the same from outside, and the text it matched
+            // is the only way to tell them apart.
+            log_event(&format!(
+                "nothing in this profile's history matches {needle:?}"
+            ));
+            self.hide();
+            return;
+        }
+        while let Some(row) = self.rows.first_child() {
+            self.rows.remove(&row);
+        }
+        let mut labels = Vec::new();
+        for index in shown.iter() {
+            let Some(url) = self.candidates.borrow().get(*index).cloned() else {
+                continue;
+            };
+            let label = gtk::Label::new(Some(&url));
+            label.set_xalign(0.0);
+            label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+            // A click takes the address, and takes nothing else: a click
+            // controller on a label leaves the keyboard where it was, where a
+            // list row would have taken it.
+            let clicked = gtk::GestureClick::new();
+            let url_for_click = url.clone();
+            let suggestions_for_click = self.handle();
+            clicked.connect_released(move |_, _, _, _| {
+                if let Some(suggestions) = suggestions_for_click.clone() {
+                    suggestions.choose(&url_for_click);
+                }
+            });
+            label.add_controller(clicked);
+            self.rows.append(&label);
+            labels.push(label);
+        }
+        *self.labels.borrow_mut() = labels;
+        let count = shown.len();
+        *self.shown.borrow_mut() = shown;
+        self.set_cursor(None);
+        self.rows.set_visible(true);
+        // What the field is offering is worth a line in the log: a set of rows
+        // that is not where it should be, or offers nothing, looks identical from
+        // outside the window.
+        log_event(&format!("offering {count} addresses for {needle:?}"));
+    }
+
+    /// Move the keyboard on the list of rows, or off it.
+    fn set_cursor(&self, cursor: Option<usize>) {
+        self.cursor.set(cursor);
+        // The row the keyboard is on is marked in the text, with the same arrow a
+        // list would have highlighted, because a plain label cannot be selected -
+        // and cannot take the keyboard on its way either.
+        let labels = self.labels.borrow();
+        for (position, label) in labels.iter().enumerate() {
+            let shown = self.shown.borrow();
+            let Some(index) = shown.get(position) else {
+                continue;
+            };
+            let Some(url) = self.candidates.borrow().get(*index).cloned() else {
+                continue;
+            };
+            let text = if cursor == Some(position) {
+                format!("MARK {url}")
+            } else {
+                format!("  {url}")
+            };
+            label.set_text(&text.replace("MARK", "›"));
+        }
+    }
+
+    /// Move the keyboard down or up the list, stopping at the ends.
+    fn move_cursor(&self, steps: isize) {
+        let count = self.shown.borrow().len();
+        if count == 0 {
+            return;
+        }
+        let next = match self.cursor.get() {
+            None if steps > 0 => 0,
+            None => (count - 1) as isize,
+            Some(current) => (current as isize + steps).clamp(0, count as isize - 1),
+        };
+        self.set_cursor(Some(next as usize));
+    }
+
+    /// The address the keyboard is on, if it is on one.
+    fn cursor_url(&self) -> Option<String> {
+        let cursor = self.cursor.get()?;
+        let shown = self.shown.borrow();
+        let index = *shown.get(cursor)?;
+        self.candidates.borrow().get(index).cloned()
+    }
+
+    /// A handle on this, for the closures a row carries.
+    fn handle(&self) -> Option<Rc<Suggestions>> {
+        self.me.borrow().upgrade()
+    }
+
+    /// Set what a picked address should do: navigate, in this app.
+    fn set_navigator(&self, navigate: Navigate) {
+        *self.navigate.borrow_mut() = Some(navigate);
+    }
+
+    /// Take the address a person picked and go there.
+    fn choose(&self, url: &str) {
+        self.hide();
+        let go = self.navigate.borrow().clone();
+        if let Some(go) = go {
+            go(url);
+        }
+    }
+
+    /// Take the rows away and forget where the keyboard was.
+    ///
+    /// The rows are in the window rather than floating above it on purpose. A
+    /// popover is a surface of its own, and on this desktop one takes the
+    /// keyboard with it: the field stopped receiving the letters that were typed
+    /// after the rows appeared, and Return went to the popover instead of to the
+    /// address. A band cannot do that, and while a person is typing the page
+    /// moving down a little is the honest way to show they are being offered
+    /// something.
+    fn hide(&self) {
+        self.rows.set_visible(false);
+        self.set_cursor(None);
+        self.active.set(false);
+    }
+
+    /// Write the field from the shell, offering nothing for it.
+    fn write(&self, entry: &gtk::Entry, text: &str) {
+        self.written.set(Some(text.to_string()));
+        self.rows.set_visible(false);
+        self.set_cursor(None);
+        self.active.set(false);
+        entry.set_text(text);
+    }
+}
+
+/// Whether this change to the field was the shell's own write.
+fn needle_is_shells(typed: &str, written: Option<&str>) -> bool {
+    written == Some(typed)
+}
+
+/// Offer the addresses this profile has already been to, from the field.
+///
+/// Returns the state, so the field's own Return can ask whether the keyboard is
+/// on a row before it navigates what was typed.
+///
+/// Nothing here leaves the machine: the candidates are the profile's own history,
+/// and the search path still only goes out when Return is pressed. The addresses
+/// are read at most once every half minute and matched in memory, so typing a
+/// URL costs no database work per letter.
+fn offer_history(
+    address: &gtk::Entry,
+    store: &Rc<RefCell<storage::SessionStore>>,
+) -> Rc<Suggestions> {
+    // A box of labels, not a list: a list claims the keyboard the moment a row is
+    // selected, and a keyboard that arrives somewhere else is a keyboard this
+    // browser has lost. Labels cannot be selected, so the row the keyboard is on
+    // is marked in the text instead, and the keyboard stays in the field.
+    let rows_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    rows_box.set_margin_start(6);
+    rows_box.set_margin_end(6);
+
+    let suggestions = Rc::new(Suggestions {
+        candidates: RefCell::new(Vec::new()),
+        shown: RefCell::new(Vec::new()),
+        cursor: Cell::new(None),
+        written: Cell::new(None),
+        active: Cell::new(false),
+        read_at: Cell::new(0),
+        navigate: RefCell::new(None),
+        me: RefCell::new(Weak::new()),
+        rows: rows_box.clone(),
+        labels: RefCell::new(Vec::new()),
+    });
+    suggestions.me.replace(Rc::downgrade(&suggestions));
+    rows_box.set_visible(false);
+
+    let for_typed = suggestions.clone();
+    let store_for_typed = store.clone();
+    address.connect_changed(move |entry| {
+        for_typed.update(&entry.text(), &store_for_typed);
+    });
+
+    suggestions
+}
+
+#[derive(Clone)]
+struct Chrome {
+    address: gtk::Entry,
+    new_tab: gtk::Button,
+    private_tab: gtk::Button,
+    back: gtk::Button,
+    forward: gtk::Button,
+    reload: gtk::Button,
+    zoom_out: gtk::Button,
+    zoom_label: gtk::Label,
+    zoom_in: gtk::Button,
+    bookmark: gtk::Button,
+    readable: gtk::Button,
+    /// What the field is offering, which writes to the field go through.
+    suggestions: Rc<Suggestions>,
+}
+
+/// Build the window chrome: the title bar with the tab strip inside it, and the
+/// field row below.
+///
+/// Two bands rather than four, because the tab strip is the title bar instead of
+/// a bar stacked under one, and the row that holds the address field holds
+/// nothing else. The names are the Adwaita symbolic ones, so they follow the
+/// system icon theme instead of shipping artwork.
+///
+/// Icons, not words. A text "Reload" button sat in a row of symbolic buttons
+/// and looked like a different kind of control; every button here is an icon
+/// with a tooltip, so the meaning lives in the tooltip and the row reads as one
+/// thing.
+fn build_chrome(
+    tab_view: &adw::TabView,
+    store: &Rc<RefCell<storage::SessionStore>>,
+) -> (adw::HeaderBar, gtk::Box, Chrome) {
+    let tab_bar = adw::TabBar::new();
+    tab_bar.set_view(Some(tab_view));
+    // Always shown: a strip that appears and disappears with the number of tabs
+    // moves the whole bar every time a tab opens, and a bar that moves is a bar
+    // nobody can aim at.
+    tab_bar.set_autohide(false);
+    let header = adw::HeaderBar::new();
+    header.set_title_widget(Some(&tab_bar));
+
+    let new_tab = gtk::Button::from_icon_name("tab-new-symbolic");
+    new_tab.set_tooltip_text(Some("New tab"));
+    let private_tab = gtk::Button::from_icon_name("view-conceal-symbolic");
+    private_tab.set_tooltip_text(Some("New private tab"));
+    let back = gtk::Button::from_icon_name("go-previous-symbolic");
+    back.set_tooltip_text(Some("Back"));
+    let forward = gtk::Button::from_icon_name("go-next-symbolic");
+    forward.set_tooltip_text(Some("Forward"));
+    let reload = gtk::Button::from_icon_name("view-refresh-symbolic");
+    reload.set_tooltip_text(Some("Reload (Ctrl+R)"));
+    for button in [&new_tab, &private_tab, &back, &forward, &reload] {
+        header.pack_start(button);
+    }
+
+    let zoom_out = gtk::Button::from_icon_name("zoom-out-symbolic");
+    zoom_out.set_tooltip_text(Some("Zoom out (Ctrl+-)"));
     // The percentage is a label, not a button: Ctrl+0 is the way back to 100%,
     // and the label keeps the current level visible at all times.
-    label.set_sensitive(false);
+    let zoom_label = gtk::Label::new(Some("100%"));
+    zoom_label.set_width_chars(5);
+    zoom_label.set_xalign(0.5);
+    zoom_label.set_sensitive(false);
+    zoom_label.set_tooltip_text(Some("Reset zoom (Ctrl+0)"));
+    let zoom_in = gtk::Button::from_icon_name("zoom-in-symbolic");
+    zoom_in.set_tooltip_text(Some("Zoom in (Ctrl++)"));
+    let bookmark = gtk::Button::from_icon_name("non-starred-symbolic");
+    let readable = gtk::Button::from_icon_name("view-reading-mode-symbolic");
+    for button in [&zoom_out, &zoom_in, &bookmark, &readable] {
+        header.pack_end(button);
+    }
+    header.pack_end(&zoom_label);
+
+    let address = gtk::Entry::new();
+    address.set_placeholder_text(Some("Address (use search: for a configured search)"));
+    address.set_width_chars(48);
+    address.set_hexpand(true);
+    let field = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    field.set_margin_top(6);
+    field.set_margin_end(6);
+    field.set_margin_bottom(6);
+    field.set_margin_start(6);
+    field.append(&address);
+
+    let suggestions = offer_history(&address, store);
+    let chrome = Chrome {
+        address,
+        new_tab,
+        private_tab,
+        back,
+        forward,
+        reload,
+        zoom_out,
+        zoom_label,
+        zoom_in,
+        bookmark,
+        readable,
+        suggestions,
+    };
+    (header, field, chrome)
 }
 
 /// Report a page-level event on stderr as well as in the status line.
@@ -693,7 +1123,7 @@ fn connect_zoom_buttons(
 /// These are the events worth having in a terminal or a bug report, so they are
 /// the ones written down.
 fn log_event(message: &str) {
-    eprintln!("browsrl: {message}");
+    eprintln!("brwsl: {message}");
 }
 
 /// Name a web-process death in words a person can act on.
@@ -712,8 +1142,18 @@ fn describe_termination(reason: webkit6::WebProcessTerminationReason) -> &'stati
 
 /// Ask before granting a site a device capability.
 ///
-/// The default is refusal: the dialog starts on "Deny" and dismissing it denies,
-/// so a page never gains camera, microphone or location access by default.
+/// The default is refusal, and it is refusal by construction rather than by
+/// setting: "Allow" is an ordinary button the keyboard cannot reach, so no stray
+/// Return can turn a camera on, and the only thing the default key and Escape
+/// can do is deny.
+///
+/// This started as an `AdwAlertDialog` with `set_default_response("deny")` and a
+/// suggested "Allow", which sounds sufficient and is not. Measured on this
+/// machine, one Return in about eight still answered "allow" - libadwaita gives
+/// the affirmative response initial focus while the dialog's first frame is
+/// being mapped, and the default response did not always win that race - and the
+/// page received a real stream. A property that loses a race is not a safety
+/// property, so the prompt is a window where the grant is not a response at all.
 fn ask_for_permission(state: &PageRef, request: &webkit6::PermissionRequest) {
     // The request object exposes no URI, so the origin shown is the tab's own
     // current address, which is what the person is looking at anyway.
@@ -723,53 +1163,149 @@ fn ask_for_permission(state: &PageRef, request: &webkit6::PermissionRequest) {
     } else {
         origin
     };
-    let dialog = adw::AlertDialog::new(
-        Some("Allow this capability?"),
-        Some(&format!(
-            "{origin} is asking for a capability such as the camera or microphone."
-        )),
-    );
-    dialog.add_response("deny", "Deny");
-    dialog.add_response("allow", "Allow");
-    dialog.set_response_appearance("allow", adw::ResponseAppearance::Suggested);
-    dialog.set_default_response(Some("deny"));
-    dialog.set_close_response("deny");
-
-    let request = request.clone();
-    let for_log = origin.clone();
-    dialog.connect_response(None, move |dialog, response| {
-        if response == "allow" {
-            request.allow();
-            log_event(&format!("granted a capability to {for_log}"));
-        } else {
-            request.deny();
-            log_event(&format!("refused a capability for {for_log}"));
-        }
-        dialog.close();
+    // The prompt is a window of this application, and it reports itself to the
+    // compositor under the application's class. That class is what decides
+    // whether the keyboard can reach the prompt: a plain window reports the
+    // binary's name instead, and anything that aims keys at this application -
+    // the end-to-end harness among them, which refuses to type into a window it
+    // does not recognise - then treats the prompt as somebody else's, and
+    // Return and Escape go nowhere.
+    let prompt = state.window.upgrade().and_then(|parent| {
+        parent
+            .application()
+            .map(|application| (parent, application))
     });
+    let Some((parent, application)) = prompt else {
+        // No window, or no application behind it: there is nobody to ask, so the
+        // request is refused rather than left waiting on a prompt no one sees.
+        request.deny();
+        log_event("refused a capability: the window it belongs to is gone");
+        return;
+    };
+    let dialog = adw::ApplicationWindow::builder()
+        .application(&application)
+        .title("Allow this capability?")
+        .modal(true)
+        .default_width(420)
+        .build();
+    dialog.set_transient_for(Some(&parent));
+
+    let deny = gtk::Button::with_label("Deny");
+    let allow = gtk::Button::with_label("Allow");
+    // Unfocusable, so Return, Tab and the space bar have nothing to land on but
+    // Deny. Granting a device takes a click on this one button.
+    allow.set_focusable(false);
+    deny.set_focusable(true);
+
+    let header = adw::HeaderBar::new();
+    header.set_title_widget(Some(&adw::WindowTitle::new("Allow this capability?", "")));
+    header.pack_start(&deny);
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    body.set_margin_top(12);
+    body.set_margin_bottom(12);
+    body.set_margin_start(12);
+    body.set_margin_end(12);
+    let message = gtk::Label::new(Some(&format!(
+        "{origin} is asking for a capability such as the camera or microphone."
+    )));
+    message.set_xalign(0.0);
+    message.set_wrap(true);
+    body.append(&message);
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    actions.set_halign(gtk::Align::End);
+    actions.set_margin_top(12);
+    actions.append(&allow);
+    body.append(&actions);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    root.append(&header);
+    root.append(&body);
+    dialog.set_content(Some(&root));
+    // Return and Escape both land here: Return on the default widget, Escape by
+    // way of the close request below.
+    dialog.set_default_widget(Some(&deny));
+
+    // The Deny button and dismissing the window are two paths to the same end,
+    // and one Return takes both: Deny is the default widget, and closing is
+    // what a dismissed default does. So whichever arrives first answers the
+    // request and the other finds it already answered, rather than denying
+    // twice and reporting it twice.
+    let answered = Rc::new(Cell::new(false));
+
+    // Escape refuses, stated rather than assumed. The prompt is a window, and a
+    // window is not closed by a keystroke the way a dialog is, so the refusal it
+    // stands for is wired here - the same key controller the window's shifted
+    // letter shortcuts use.
+    let controller = gtk::EventControllerKey::new();
+    let request_for_escape = request.clone();
+    let for_log_escape = origin.clone();
+    let window_for_escape = dialog.clone();
+    let answered_for_escape = answered.clone();
+    controller.connect_key_pressed(move |_, keyval, _, _| {
+        if keyval != gtk::gdk::Key::Escape {
+            return glib::Propagation::Proceed;
+        }
+        if !answered_for_escape.replace(true) {
+            request_for_escape.deny();
+            log_event(&format!("refused a capability for {for_log_escape}"));
+        }
+        window_for_escape.close();
+        glib::Propagation::Stop
+    });
+    dialog.add_controller(controller);
+
+    let request_for_deny = request.clone();
+    let for_log_deny = origin.clone();
+    let window_for_deny = dialog.clone();
+    let answered_for_deny = answered.clone();
+    deny.connect_clicked(move |_| {
+        if answered_for_deny.replace(true) {
+            return;
+        }
+        request_for_deny.deny();
+        log_event(&format!("refused a capability for {for_log_deny}"));
+        window_for_deny.close();
+    });
+
+    let request_for_close = request.clone();
+    let for_log_close = origin.clone();
+    let answered_for_close = answered.clone();
+    dialog.connect_close_request(move |_| {
+        // Dismissing the prompt is a refusal, never a grant: the request is
+        // still outstanding here, and a WebKit permission request has no state
+        // that survives being dropped.
+        if !answered_for_close.replace(true) {
+            request_for_close.deny();
+            log_event(&format!("refused a capability for {for_log_close}"));
+        }
+        Propagation::Proceed
+    });
+
+    let request_for_allow = request.clone();
+    let for_log_allow = origin.clone();
+    let window_for_allow = dialog.clone();
+    let answered_for_allow = answered.clone();
+    allow.connect_clicked(move |_| {
+        if answered_for_allow.replace(true) {
+            return;
+        }
+        request_for_allow.allow();
+        log_event(&format!("granted a capability to {for_log_allow}"));
+        window_for_allow.close();
+    });
+
     log_event(&format!(
         "a page at {origin} is asking for a capability; the answer defaults to deny"
     ));
-    dialog.present(state.window.upgrade().as_ref());
+    dialog.present();
 }
 
-fn connect_readability_button(state: &PageRef, button: &gtk::Button) {
-    let weak: Weak<PageState> = Rc::downgrade(state);
-    button.connect_clicked(move |_| {
-        let Some(state) = weak.upgrade() else {
-            return;
-        };
-        toggle_readability(&state);
-    });
-}
-
-fn set_bookmark_icon(state: &PageRef, bookmarked: bool) {
-    state.bookmark.set_icon_name(if bookmarked {
+fn set_bookmark_icon(button: &gtk::Button, bookmarked: bool) {
+    button.set_icon_name(if bookmarked {
         "starred-symbolic"
     } else {
         "non-starred-symbolic"
     });
-    state.bookmark.set_tooltip_text(Some(if bookmarked {
+    button.set_tooltip_text(Some(if bookmarked {
         "Remove bookmark (Ctrl+D)"
     } else {
         "Bookmark this page (Ctrl+D)"
@@ -792,16 +1328,16 @@ pub fn run(config: Config) -> Result<(), String> {
             return;
         }
         if let Err(error) = build_window(application, activate_config.clone()) {
-            eprintln!("open Browsrl window: {error}");
+            eprintln!("open Brwsl window: {error}");
             *error_slot.borrow_mut() = Some(error);
             application.quit();
         }
     });
-    // Browsrl parses its own flags, so the GTK option parser only ever sees
+    // Brwsl parses its own flags, so the GTK option parser only ever sees
     // the program name; unknown-flag handling and exit codes stay ours.
     let program = std::env::args()
         .next()
-        .unwrap_or_else(|| "browsrl".to_string());
+        .unwrap_or_else(|| "brwsl".to_string());
     application.run_with_args(&[program]);
     match startup_error.borrow_mut().take() {
         Some(error) => Err(error),
@@ -820,27 +1356,25 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         Vec::new()
     };
     let tab_view = adw::TabView::new();
-    let tab_bar = adw::TabBar::new();
-    tab_bar.set_view(Some(&tab_view));
-    tab_bar.set_autohide(false);
-
-    let header = adw::HeaderBar::new();
-    let new_tab = gtk::Button::from_icon_name("tab-new-symbolic");
-    new_tab.set_tooltip_text(Some("New tab"));
-    let private_tab = gtk::Button::with_label("Private");
-    private_tab.set_tooltip_text(Some("New private tab"));
-    header.pack_start(&new_tab);
-    header.pack_start(&private_tab);
+    // The tab strip shares one band with the window's controls instead of having
+    // a band of its own under a second one. The bar cannot be the window's
+    // title bar on this stack: gtk_window_set_titlebar is refused for an
+    // AdwApplicationWindow, and libadwaita 0.9.2 exposes no AdwWindow
+    // titlebar property of its own, so the bar is the first band of the content
+    // rather than the frame. Two bands in all - this one, then the field row -
+    // where there were four.
+    let (header, field, chrome) = build_chrome(&tab_view, &store);
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.append(&header);
-    root.append(&tab_bar);
+    root.append(&field);
+    root.append(&chrome.suggestions.rows);
     root.append(&tab_view);
     tab_view.set_vexpand(true);
 
     let window = adw::ApplicationWindow::builder()
         .application(application)
-        .title("Browsrl")
+        .title("Brwsl")
         .default_width(1100)
         .default_height(760)
         .content(&root)
@@ -854,15 +1388,42 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
     // One explicit WebKit context for the whole window. Owning it here keeps
     // the process pool, the network sessions, and any future per-window
     // settings in one place instead of implicit defaults.
+    // WebKit does not keep cookies by itself. A session that has not been told
+    // where its cookie store lives holds them in the network process's memory,
+    // which is why a profile directory, a data directory and a clean shutdown
+    // all looked right while every restart signed the person out again. The
+    // store is a file inside the profile's own data directory, in the Netscape
+    // text format WebKit reads and writes, and the private session is
+    // deliberately left without one: a private tab must leave nothing behind.
+    let data_dir = data_path(&config)?.to_string();
+    let normal_network = NetworkSession::new(Some(&data_dir), Some(cache_path(&config)?));
+    if let Some(cookies) = normal_network.cookie_manager() {
+        let store = PathBuf::from(&data_dir).join("cookies.txt");
+        // The store is created empty first, because WebKit makes the file with
+        // whatever the umask allows and the cookie jar is the one place in the
+        // profile where a session token sits in a file. A placeholder is safe
+        // here where it is not for a download: WebKit is about to be handed
+        // this path and writes to the file it finds.
+        if !store.exists()
+            && let Err(error) = std::fs::File::create(&store).map_err(|error| error.to_string())
+        {
+            eprintln!("preparing the cookie store failed: {error}");
+        }
+        if let Err(error) = downloads::restrict_mode(&store) {
+            eprintln!("restricting the cookie store failed: {error}");
+        }
+        cookies.set_persistent_storage(
+            store.to_str().unwrap_or_default(),
+            webkit6::CookiePersistentStorage::Text,
+        );
+    }
+
     let browser = Browser {
         application: application.clone(),
         window: window_ref,
         context: Rc::new(WebContext::new()),
         store: Rc::clone(&store),
-        normal_network: Rc::new(NetworkSession::new(
-            Some(data_path(&config)?),
-            Some(cache_path(&config)?),
-        )),
+        normal_network: Rc::new(normal_network),
         private_network: Rc::new(NetworkSession::new_ephemeral()),
         search_endpoint: config.search_endpoint.clone(),
         download_dir: config.download_dir().to_path_buf(),
@@ -918,7 +1479,7 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         && let Some(state) = find_state(&states, &page)
     {
         tab_view.set_selected_page(&page);
-        realize_page(&state);
+        realize_page(&state, &chrome);
     }
 
     let shell = Shell {
@@ -927,17 +1488,20 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         store: Rc::clone(&store),
         browser: browser.clone(),
         closed: Rc::new(RefCell::new(std::collections::VecDeque::new())),
+        chrome: chrome.clone(),
     };
 
-    // Tab selection realizes the page and syncs its bookmark indicator.
+    // Tab selection realizes the page and brings the window's own controls in
+    // line with the tab now in front.
     let shell_for_select = shell.clone();
+    let chrome_for_select = chrome.clone();
     tab_view.connect_selected_page_notify(move |view| {
         let Some(page) = view.selected_page() else {
             return;
         };
         if let Some(state) = find_state(&shell_for_select.states, &page) {
-            realize_page(&state);
-            shell_for_select.refresh_bookmark(&state);
+            realize_page(&state, &chrome_for_select);
+            shell_for_select.sync_chrome(&state);
         }
         // The selected tab is part of the session, so it is written down when it
         // changes rather than only when a tab closes. Without this, a browser
@@ -951,13 +1515,62 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
     });
 
     let shell_for_new = shell.clone();
+    let new_tab = chrome.new_tab.clone();
     new_tab.connect_clicked(move |_| shell_for_new.add_tab(TabMode::Normal, "about:blank"));
 
     let shell_for_private = shell.clone();
+    let private_tab = chrome.private_tab.clone();
     private_tab
         .connect_clicked(move |_| shell_for_private.add_tab(TabMode::Private, "about:blank"));
 
+    // Every other control in the chrome goes through the same methods the
+    // keyboard actions use, so a click and a shortcut cannot drift apart.
+    let shell_for_back = shell.clone();
+    let back = chrome.back.clone();
+    back.connect_clicked(move |_| {
+        if let Some(state) = shell_for_back.selected() {
+            history_step(&state, HistoryAction::Back);
+        }
+    });
+    let shell_for_forward = shell.clone();
+    let forward = chrome.forward.clone();
+    forward.connect_clicked(move |_| {
+        if let Some(state) = shell_for_forward.selected() {
+            history_step(&state, HistoryAction::Forward);
+        }
+    });
+    let shell_for_reload = shell.clone();
+    let reload = chrome.reload.clone();
+    reload.connect_clicked(move |_| shell_for_reload.reload_selected());
+    let shell_for_address = shell.clone();
+    let address = chrome.address.clone();
+    let suggestions_for_return = chrome.suggestions.clone();
+    address.connect_activate(move |entry| {
+        // Return goes to the row the keyboard has been walked onto, and to what
+        // was typed otherwise, so finishing a suggestion and typing an address
+        // both do the obvious thing.
+        let target = suggestions_for_return.cursor_url();
+        suggestions_for_return.hide();
+        match target {
+            Some(url) => shell_for_address.navigate_selected(&url),
+            None => shell_for_address.navigate_selected(&entry.text()),
+        }
+    });
+    let shell_for_zoom_out = shell.clone();
+    let zoom_out = chrome.zoom_out.clone();
+    zoom_out.connect_clicked(move |_| shell_for_zoom_out.zoom_by(-ZOOM_STEP));
+    let shell_for_zoom_in = shell.clone();
+    let zoom_in = chrome.zoom_in.clone();
+    zoom_in.connect_clicked(move |_| shell_for_zoom_in.zoom_by(ZOOM_STEP));
+    let shell_for_star = shell.clone();
+    let bookmark = chrome.bookmark.clone();
+    bookmark.connect_clicked(move |_| shell_for_star.toggle_bookmark());
+    let shell_for_read = shell.clone();
+    let readable = chrome.readable.clone();
+    readable.connect_clicked(move |_| shell_for_read.toggle_readability());
+
     let shell_for_close = shell.clone();
+    let chrome_for_close = chrome.clone();
     let endpoint_for_close = config.search_endpoint.clone();
     tab_view.connect_close_page(move |_, page| {
         let position = {
@@ -978,7 +1591,13 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         if let Some(state) = last {
             // Never leave the window without a page: the last tab resets to
             // about:blank instead of closing.
-            let _ = navigate_state(&state, "about:blank", endpoint_for_close.as_deref());
+            let _ = navigate_state(
+                &state,
+                "about:blank",
+                endpoint_for_close.as_deref(),
+                &chrome_for_close.address,
+                &chrome_for_close.suggestions,
+            );
             shell_for_close.save();
             return Propagation::Stop;
         }
@@ -1000,9 +1619,76 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         Propagation::Proceed
     });
 
+    for (label, session) in [
+        ("normal", &browser.normal_network),
+        ("private", &browser.private_network),
+    ] {
+        let manager = session.website_data_manager();
+        eprintln!(
+            "DIAG {label}: session.is_ephemeral={} manager.is_ephemeral={:?} base_data={:?}",
+            session.is_ephemeral(),
+            manager.as_ref().map(|m| m.is_ephemeral()),
+            manager
+                .as_ref()
+                .and_then(|m| m.base_data_directory())
+                .map(|value| value.to_string()),
+        );
+    }
+
     install_actions(application, &shell);
     install_shifted_letter_shortcuts(&window, application);
+    // The field, not the window, watches the keyboard while rows are showing.
+    // Key events arrive at the focus widget first, and the rows are a sibling of
+    // the field: once one is selected the list claims Return for itself and
+    // activates the row instead of letting the address be typed, so the keys are
+    // taken here, where they are seen before the list ever is. While nothing is
+    // showing every key passes straight on, so the page keeps its own arrow keys,
+    // its Return and its Escape.
+    // A row that is clicked goes the same way as a row the keyboard is on: the
+    // window tells the suggestions how to navigate, because the shell that does
+    // it is built after the chrome is.
+    let shell_for_rows = shell.clone();
+    chrome.suggestions.set_navigator(Rc::new(move |url: &str| {
+        shell_for_rows.navigate_selected(url);
+    }));
+
+    let suggestion_keys = gtk::EventControllerKey::new();
+    let for_suggestion_keys = chrome.suggestions.clone();
+    suggestion_keys.connect_key_pressed(move |_, keyval, _, _| {
+        let suggestions = &for_suggestion_keys;
+        if !suggestions.rows.is_visible() && !suggestions.active.get() {
+            return glib::Propagation::Proceed;
+        }
+        match keyval {
+            gtk::gdk::Key::Down => {
+                suggestions.move_cursor(1);
+                glib::Propagation::Stop
+            }
+            gtk::gdk::Key::Up => {
+                suggestions.move_cursor(-1);
+                glib::Propagation::Stop
+            }
+            gtk::gdk::Key::Escape => {
+                suggestions.hide();
+                glib::Propagation::Stop
+            }
+            // Return is left alone. The field's own activate signal is what takes
+            // an address, and it already asks whether the keyboard is on a row
+            // before it reads the text, so finishing a suggestion and typing an
+            // address both work through the one path the rest of the keyboard
+            // uses.
+            _ => glib::Propagation::Proceed,
+        }
+    });
+    chrome.address.add_controller(suggestion_keys);
     window.present();
+    // The first tab is selected and realized *before* the selected-page handler
+    // is connected, so nothing has put that tab into the window's controls yet:
+    // without this the field opens empty and waits for a load to fill it, which
+    // a page that never finishes would never do.
+    if let Some(state) = shell.selected() {
+        shell.sync_chrome(&state);
+    }
     // Write the session down once, here. The first tab is selected *before* the
     // selected-page handler is connected, so nothing else saves it: a browser
     // that was opened, used and then ended without a tab switch, a tab close or a
@@ -1023,11 +1709,11 @@ const ZOOM_STEP: f64 = 0.1;
 const ZOOM_MIN: f64 = 0.5;
 const ZOOM_MAX: f64 = 3.0;
 
-fn set_zoom(state: &PageRef, level: f64) {
+fn set_zoom(state: &PageRef, level: f64, label: &gtk::Label) {
     let level = level.clamp(ZOOM_MIN, ZOOM_MAX);
     state.zoom.set(level);
     let percent = (level * 100.0).round() as i64;
-    state.zoom_label.set_text(&format!("{percent}%"));
+    label.set_text(&format!("{percent}%"));
     if let Some(view) = state.view.borrow().clone() {
         view.set_zoom_level(level);
     }
@@ -1161,7 +1847,7 @@ fn shifted_letter_is_lowercase(key: &str) -> bool {
 /// It lives outside the profile, so a private download is never persisted with
 /// the browser's data, and it is removed when the window closes.
 fn private_download_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("browsrl-private-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("brwsl-private-{}", std::process::id()));
     // Best effort: if it cannot be created the download handler will refuse the
     // write rather than fall back to somewhere less private.
     let _ = std::fs::create_dir_all(&dir);
@@ -1180,6 +1866,22 @@ fn cache_path(config: &Config) -> Result<&str, String> {
         .cache_dir()
         .to_str()
         .ok_or_else(|| "cache directory is not valid UTF-8".to_string())
+}
+
+/// Whether a tab is the one in front.
+///
+/// The window's own controls show the selected tab: its address in the field,
+/// its bookmark in the star, its reading pass in the mark, its zoom in the
+/// percentage. A tab that finishes loading in the background must not write any
+/// of them, or a quiet background load would move the controls out from under
+/// the page someone is reading.
+fn in_front(state: &PageState) -> bool {
+    state
+        .tab_view
+        .upgrade()
+        .and_then(|view| view.selected_page())
+        .zip(state.page.borrow().clone())
+        .is_some_and(|(selected, mine)| selected == mine)
 }
 
 fn find_state(states: &Rc<RefCell<Vec<PageRef>>>, page: &adw::TabPage) -> Option<PageRef> {
@@ -1224,48 +1926,6 @@ fn create_page(
     content.set_hexpand(true);
     content.set_vexpand(true);
 
-    let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    toolbar.set_margin_top(6);
-    toolbar.set_margin_end(6);
-    toolbar.set_margin_bottom(6);
-    toolbar.set_margin_start(6);
-    // Icons, not words. A text "Reload" button sat in a row of symbolic buttons
-    // and looked like a different kind of control; every button here is an icon
-    // with a tooltip, so the meaning lives in the tooltip and the row reads as
-    // one thing. The names are the Adwaita symbolic ones, so they follow the
-    // system icon theme instead of shipping artwork.
-    let back = gtk::Button::from_icon_name("go-previous-symbolic");
-    back.set_tooltip_text(Some("Back"));
-    let forward = gtk::Button::from_icon_name("go-next-symbolic");
-    forward.set_tooltip_text(Some("Forward"));
-    let reload = gtk::Button::from_icon_name("view-refresh-symbolic");
-    reload.set_tooltip_text(Some("Reload (Ctrl+R)"));
-    let zoom_out = gtk::Button::from_icon_name("zoom-out-symbolic");
-    zoom_out.set_tooltip_text(Some("Zoom out (Ctrl+-)"));
-    let zoom_label = gtk::Label::new(Some("100%"));
-    zoom_label.set_width_chars(5);
-    zoom_label.set_xalign(0.5);
-    zoom_label.set_tooltip_text(Some("Reset zoom (Ctrl+0)"));
-    let zoom_in = gtk::Button::from_icon_name("zoom-in-symbolic");
-    zoom_in.set_tooltip_text(Some("Zoom in (Ctrl++)"));
-    let bookmark = gtk::Button::from_icon_name("non-starred-symbolic");
-    let readable = gtk::Button::from_icon_name("view-reading-mode-symbolic");
-    let address = gtk::Entry::new();
-    address.set_text(&url);
-    address.set_placeholder_text(Some("Address (use search: for a configured search)"));
-    address.set_width_chars(48);
-    address.set_hexpand(true);
-    for button in [&back, &forward, &reload] {
-        toolbar.append(button);
-    }
-    toolbar.append(&address);
-    toolbar.append(&zoom_out);
-    toolbar.append(&zoom_label);
-    toolbar.append(&zoom_in);
-    toolbar.append(&bookmark);
-    toolbar.append(&readable);
-    content.append(&toolbar);
-
     let placeholder = gtk::Label::new(Some("WebView is created when this tab is selected"));
     placeholder.set_hexpand(true);
     placeholder.set_vexpand(true);
@@ -1281,6 +1941,14 @@ fn create_page(
     status.set_margin_end(8);
     status.set_margin_bottom(4);
     content.append(&status);
+    // The line reports only when it has something to say, so a tab with nothing
+    // to report gives the page the height instead of holding a strip of it. The
+    // text is written from a dozen places, so the visibility follows the label's
+    // own text rather than being set at each of them.
+    status.connect_notify_local(Some("label"), |status, _| {
+        let empty = status.text().is_empty();
+        status.set_visible(!empty);
+    });
 
     // A restored tab keeps the title it had; a fresh tab gets its positional
     // label until a page reports a real one.
@@ -1290,7 +1958,6 @@ fn create_page(
     let state = Rc::new(PageState {
         content: content.clone(),
         placeholder: placeholder.clone(),
-        address: address.clone(),
         status: status.clone(),
         url: RefCell::new(url.clone()),
         title: RefCell::new(title.clone()),
@@ -1305,24 +1972,11 @@ fn create_page(
         window: browser.window.clone(),
         tab_view: tab_view_ref,
         zoom: Cell::new(1.0),
-        zoom_label: zoom_label.clone(),
-        bookmark: bookmark.clone(),
-        readable: readable.clone(),
         readable_on: Cell::new(false),
         readable_manager: readability::manager(),
         readable_sheet: RefCell::new(None),
         store: browser.store.clone(),
     });
-
-    connect_address(&state, &address, browser.search_endpoint.clone());
-    connect_history_button(&state, &back, HistoryAction::Back);
-    connect_history_button(&state, &forward, HistoryAction::Forward);
-    connect_reload(&state, &reload);
-    connect_bookmark_button(&state, &browser.store, &bookmark);
-    connect_readability_button(&state, &readable);
-    connect_zoom_buttons(&state, &zoom_out, &zoom_in, &zoom_label);
-    set_bookmark_icon(&state, false);
-    set_readability_icon(&state, false);
 
     let page = tab_view.append(&content);
     page.set_title(&title);
@@ -1330,16 +1984,16 @@ fn create_page(
     (page, state)
 }
 
-fn connect_address(state: &PageRef, address: &gtk::Entry, search_endpoint: Option<String>) {
-    let weak: Weak<PageState> = Rc::downgrade(state);
-    address.connect_activate(move |entry| {
-        let Some(state) = weak.upgrade() else {
-            return;
-        };
-        if let Err(error) = navigate_state(&state, &entry.text(), search_endpoint.as_deref()) {
-            state.status.set_text(&error);
-        }
-    });
+/// Move the selected tab back or forward, if it can.
+fn history_step(state: &PageRef, action: HistoryAction) {
+    let Some(view) = state.view.borrow().clone() else {
+        return;
+    };
+    match action {
+        HistoryAction::Back if view.can_go_back() => view.go_back(),
+        HistoryAction::Forward if view.can_go_forward() => view.go_forward(),
+        _ => {}
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1348,63 +2002,15 @@ enum HistoryAction {
     Forward,
 }
 
-fn connect_history_button(state: &PageRef, button: &gtk::Button, action: HistoryAction) {
-    let weak: Weak<PageState> = Rc::downgrade(state);
-    button.connect_clicked(move |_| {
-        let Some(state) = weak.upgrade() else {
-            return;
-        };
-        let Some(view) = state.view.borrow().clone() else {
-            return;
-        };
-        match action {
-            HistoryAction::Back if view.can_go_back() => view.go_back(),
-            HistoryAction::Forward if view.can_go_forward() => view.go_forward(),
-            _ => {}
-        }
-    });
-}
-
-fn connect_bookmark_button(
-    state: &PageRef,
-    store: &Rc<RefCell<storage::SessionStore>>,
-    button: &gtk::Button,
-) {
-    // The click target is the tab itself, so the handler re-uses the same
-    // toggle the Ctrl+D action runs rather than duplicating the logic.
-    let weak: Weak<PageState> = Rc::downgrade(state);
-    let store = store.clone();
-    button.connect_clicked(move |_| {
-        let Some(state) = weak.upgrade() else {
-            return;
-        };
-        toggle_bookmark(&state, &store);
-    });
-}
-
-fn connect_reload(state: &PageRef, button: &gtk::Button) {
-    let weak: Weak<PageState> = Rc::downgrade(state);
-    button.connect_clicked(move |_| {
-        let Some(state) = weak.upgrade() else {
-            return;
-        };
-        let Some(view) = state.view.borrow().clone() else {
-            return;
-        };
-        match view.uri() {
-            Some(uri) => view.load_uri(uri.as_str()),
-            None => state.status.set_text("This tab has no address to reload."),
-        }
-    });
-}
-
 fn navigate_state(
     state: &PageRef,
     input: &str,
     search_endpoint: Option<&str>,
+    address: &gtk::Entry,
+    suggestions: &Suggestions,
 ) -> Result<(), String> {
     let url = navigation::normalize_input_with_search(input, search_endpoint)?;
-    state.address.set_text(&url);
+    suggestions.write(address, &url);
     *state.url.borrow_mut() = url.clone();
     state.status.set_text("");
     if let Some(view) = state.view.borrow().clone() {
@@ -1413,7 +2019,12 @@ fn navigate_state(
     Ok(())
 }
 
-fn realize_page(state: &PageRef) {
+fn realize_page(state: &PageRef, chrome: &Chrome) {
+    // The load callback lives as long as the view, so it takes its own handles
+    // on the two window controls it writes instead of borrowing the chrome.
+    let address_for_load = chrome.address.clone();
+    let bookmark_for_load = chrome.bookmark.clone();
+    let suggestions_for_load = chrome.suggestions.clone();
     if state.view.borrow().is_some() {
         return;
     }
@@ -1432,6 +2043,19 @@ fn realize_page(state: &PageRef) {
         // A failed load used to leave a blank page with no explanation.
         let weak: Weak<PageState> = Rc::downgrade(state);
         view.connect_load_failed(move |_, _, uri, error| {
+            // Two of WebKit's load errors are not failures. A page that starts
+            // another load cancels the one in flight, and a policy change
+            // cancels one outright; the replacement load is the one that
+            // matters, and it reports itself. YouTube does the first on every
+            // visit - its consent and localisation step replaces the very first
+            // request - so treating these as failures reported a broken page over
+            // a page that had loaded perfectly.
+            if error.matches(webkit6::NetworkError::Cancelled)
+                || error.matches(webkit6::PolicyError::FrameLoadInterruptedByPolicyChange)
+            {
+                log_event(&format!("a load of {uri} was replaced by another one"));
+                return false;
+            }
             let Some(state) = weak.upgrade() else {
                 return false;
             };
@@ -1484,7 +2108,11 @@ fn realize_page(state: &PageRef) {
                 if let Some(uri) = view.uri() {
                     let uri = uri.to_string();
                     *state.url.borrow_mut() = uri.clone();
-                    state.address.set_text(&uri);
+                    // The field belongs to the tab in front, so a background
+                    // tab finishing its load must not write into it.
+                    if in_front(&state) {
+                        suggestions_for_load.write(&address_for_load, &uri);
+                    }
                 }
                 if let Some(title) = view.title() {
                     let title = title.to_string();
@@ -1493,21 +2121,16 @@ fn realize_page(state: &PageRef) {
                         page.set_title(&title);
                     }
                     // The window title follows the page in front, the way every
-                    // browser does. It used to stay "Browsrl" forever, which made
+                    // browser does. It used to stay "Brwsl" forever, which made
                     // the window list and the taskbar entry useless once a real
                     // page was open. Only the selected tab may retitle the window:
                     // a background tab finishing its load must not steal the title.
-                    let is_selected = state
-                        .tab_view
-                        .upgrade()
-                        .and_then(|view| view.selected_page())
-                        .zip(state.page.borrow().clone())
-                        .is_some_and(|(selected, mine)| selected == mine);
+                    let is_selected = in_front(&state);
                     if let (true, Some(window)) = (is_selected, state.window.upgrade()) {
                         let label = if title.trim().is_empty() {
-                            "Browsrl".to_string()
+                            "Brwsl".to_string()
                         } else {
-                            format!("{title} — Browsrl")
+                            format!("{title} — Brwsl")
                         };
                         window.set_title(Some(&label));
                     }
@@ -1515,13 +2138,16 @@ fn realize_page(state: &PageRef) {
                 // A completed load is what history records; the shell writes it
                 // rather than injecting script into the page.
                 record_visit(&state, &store);
-                set_bookmark_icon(
-                    &state,
-                    store
-                        .borrow()
-                        .is_bookmarked(&current_state_url(&state))
-                        .unwrap_or(false),
-                );
+                // The star is the window's, so only the tab in front may write it.
+                if in_front(&state) {
+                    set_bookmark_icon(
+                        &bookmark_for_load,
+                        store
+                            .borrow()
+                            .is_bookmarked(&current_state_url(&state))
+                            .unwrap_or(false),
+                    );
+                }
             }
             _ => {}
         }

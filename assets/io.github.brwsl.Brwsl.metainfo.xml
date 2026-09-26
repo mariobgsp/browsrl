@@ -1,15 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.browsrl.Browsrl</id>
+  <id>io.github.brwsl.Brwsl</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
 
-  <name>Browsrl</name>
+  <name>Brwsl</name>
   <summary>A small local-first browser shell for GTK desktops</summary>
+  <url type="homepage">https://github.com/mariobgsp/brwsl</url>
+  <url type="bugtracker">https://github.com/mariobgsp/brwsl/issues</url>
+  <developer id="io.github.mariobgsp">
+    <name>mariobgsp</name>
+  </developer>
 
   <description>
     <p>
-      Browsrl is a GTK4 and WebKitGTK 6.0 browser shell built around a strict
+      Brwsl is a GTK4 and WebKitGTK 6.0 browser shell built around a strict
       navigation boundary and a single local profile directory.
     </p>
     <ul>
@@ -21,10 +26,10 @@
     </ul>
   </description>
 
-  <launchable type="desktop-id">io.github.browsrl.Browsrl.desktop</launchable>
+  <launchable type="desktop-id">io.github.brwsl.Brwsl.desktop</launchable>
 
   <provides>
-    <binary>browsrl</binary>
+    <binary>brwsl</binary>
   </provides>
 
   <categories>

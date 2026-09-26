@@ -105,7 +105,7 @@ if __name__ == "__main__":
     if "--preview" in sys.argv:
         preview()
     else:
-        target = sys.argv[1] if len(sys.argv) > 1 else "assets/browsrl-128.png"
+        target = sys.argv[1] if len(sys.argv) > 1 else "assets/brwsl-128.png"
         scale, ox, oy, gw, gh = render(target)
         print(f"wrote {target}: glyph {gw}x{gh} at scale {scale}, offset ({ox},{oy})")
         preview()
