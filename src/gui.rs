@@ -194,6 +194,9 @@ struct PageState {
     /// Weak window handle, so dialogs parent to the window without keeping it
     /// alive.
     window: glib::WeakRef<adw::ApplicationWindow>,
+    /// Weak tab-view handle, so a background tab can tell it is in the back and
+    /// leave the window title to the tab in front.
+    tab_view: glib::WeakRef<adw::TabView>,
     /// Per-tab zoom level, kept here so switching tabs restores it.
     zoom: Cell<f64>,
     /// Label showing the zoom percentage, kept in step with `zoom`.
@@ -821,6 +824,20 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
         let (page, state) = create_page(&tab_view, &browser, url, TabMode::Normal, 1, None);
         states.borrow_mut().push(state);
         selected_page = Some(page);
+    } else if config.start_url_given {
+        // A saved session *and* a URL means someone clicked a link, and a link
+        // has to open. Restoring the session instead of the URL is how a launch
+        // could look like it did nothing: the old tabs came back and the page
+        // that was asked for never appeared. So the session is kept and the URL
+        // opens on top of it, which is what the other browsers do.
+        let url = navigation::normalize_input_with_search(
+            &config.start_url,
+            config.search_endpoint.as_deref(),
+        )?;
+        let number = states.borrow().len() + 1;
+        let (page, state) = create_page(&tab_view, &browser, url, TabMode::Normal, number, None);
+        states.borrow_mut().push(state);
+        selected_page = Some(page);
     }
     if let Some(page) = selected_page.clone()
         && let Some(state) = find_state(&states, &page)
@@ -911,6 +928,13 @@ fn build_window(application: &adw::Application, config: Config) -> Result<(), St
     install_actions(application, &shell);
     install_shifted_letter_shortcuts(&window, application);
     window.present();
+    // Write the session down once, here. The first tab is selected *before* the
+    // selected-page handler is connected, so nothing else saves it: a browser
+    // that was opened, used and then ended without a tab switch, a tab close or a
+    // clean quit left nothing to restore. It also means the session on disk
+    // always matches the window that is actually open, rather than catching up
+    // at some later, unrelated moment.
+    shell.save();
     Ok(())
 }
 
@@ -932,6 +956,18 @@ fn set_zoom(state: &PageRef, level: f64) {
     if let Some(view) = state.view.borrow().clone() {
         view.set_zoom_level(level);
     }
+}
+
+/// Quit through the application, so the windows close the way they do when a
+/// person closes them.
+///
+/// This is on the application rather than only on a button, so the session is
+/// saved on the way out and so a script can restart the browser. It matters
+/// because a process killed from outside never reaches the close handler, and
+/// that handler is what writes the session down.
+fn quit_application(shell: &Shell) {
+    shell.save();
+    shell.browser.application.quit();
 }
 
 fn install_actions(application: &adw::Application, shell: &Shell) {
@@ -976,6 +1012,7 @@ fn install_actions(application: &adw::Application, shell: &Shell) {
         ),
         ("restore-closed", &[], Shell::restore_closed),
         ("history", &["<Primary>h"], Shell::open_history),
+        ("quit", &[], quit_application),
         ("readability", &[], Shell::toggle_readability),
         ("focus-address", &["<Primary>l"], Shell::focus_address),
         ("copy-page-address", &["<Primary>c"], Shell::copy_address),
@@ -1093,6 +1130,10 @@ fn create_page(
     number: usize,
     restored_title: Option<String>,
 ) -> (adw::TabPage, PageRef) {
+    // Weak, like the window handle: a tab must not keep the tab view alive.
+    let tab_view_ref: glib::WeakRef<adw::TabView> = glib::WeakRef::new();
+    tab_view_ref.set(Some(tab_view));
+
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.set_hexpand(true);
     content.set_vexpand(true);
@@ -1102,12 +1143,17 @@ fn create_page(
     toolbar.set_margin_end(6);
     toolbar.set_margin_bottom(6);
     toolbar.set_margin_start(6);
-    let back = gtk::Button::with_label("←");
+    // Icons, not words. A text "Reload" button sat in a row of symbolic buttons
+    // and looked like a different kind of control; every button here is an icon
+    // with a tooltip, so the meaning lives in the tooltip and the row reads as
+    // one thing. The names are the Adwaita symbolic ones, so they follow the
+    // system icon theme instead of shipping artwork.
+    let back = gtk::Button::from_icon_name("go-previous-symbolic");
     back.set_tooltip_text(Some("Back"));
-    let forward = gtk::Button::with_label("→");
+    let forward = gtk::Button::from_icon_name("go-next-symbolic");
     forward.set_tooltip_text(Some("Forward"));
-    let reload = gtk::Button::with_label("Reload");
-    reload.set_tooltip_text(Some("Reload"));
+    let reload = gtk::Button::from_icon_name("view-refresh-symbolic");
+    reload.set_tooltip_text(Some("Reload (Ctrl+R)"));
     let zoom_out = gtk::Button::from_icon_name("zoom-out-symbolic");
     zoom_out.set_tooltip_text(Some("Zoom out (Ctrl+-)"));
     let zoom_label = gtk::Label::new(Some("100%"));
@@ -1171,6 +1217,7 @@ fn create_page(
         context: browser.context.clone(),
         view: RefCell::new(None),
         window: browser.window.clone(),
+        tab_view: tab_view_ref,
         zoom: Cell::new(1.0),
         zoom_label: zoom_label.clone(),
         bookmark: bookmark.clone(),
@@ -1313,7 +1360,7 @@ fn realize_page(state: &PageRef) {
                 return;
             };
             let message = format!(
-                "the page stopped responding ({}); press Reload to try again",
+                "the page stopped responding ({}); use the reload button to try again",
                 describe_termination(reason)
             );
             state.status.set_text(&message);
@@ -1358,6 +1405,25 @@ fn realize_page(state: &PageRef) {
                     *state.title.borrow_mut() = title.clone();
                     if let Some(page) = state.page.borrow().as_ref() {
                         page.set_title(&title);
+                    }
+                    // The window title follows the page in front, the way every
+                    // browser does. It used to stay "Browsrl" forever, which made
+                    // the window list and the taskbar entry useless once a real
+                    // page was open. Only the selected tab may retitle the window:
+                    // a background tab finishing its load must not steal the title.
+                    let is_selected = state
+                        .tab_view
+                        .upgrade()
+                        .and_then(|view| view.selected_page())
+                        .zip(state.page.borrow().clone())
+                        .is_some_and(|(selected, mine)| selected == mine);
+                    if let (true, Some(window)) = (is_selected, state.window.upgrade()) {
+                        let label = if title.trim().is_empty() {
+                            "Browsrl".to_string()
+                        } else {
+                            format!("{title} — Browsrl")
+                        };
+                        window.set_title(Some(&label));
                     }
                 }
                 // A completed load is what history records; the shell writes it
@@ -1404,6 +1470,12 @@ fn current_state_url(state: &PageRef) -> String {
         .as_ref()
         .and_then(|view| view.uri())
         .map(|uri| uri.to_string())
+        // An empty URI is not an answer, it is the absence of one. After a
+        // renderer crash WebKit reports "" rather than None, and taking that as
+        // the current URL is what stopped a crashed tab from ever being saved:
+        // the store rightly refuses an empty URL, the refusal failed the whole
+        // save, and the session came back empty on the next launch.
+        .filter(|uri| !uri.trim().is_empty())
         .unwrap_or_else(|| state.url.borrow().clone())
 }
 
@@ -1413,19 +1485,33 @@ fn save_sessions(
     store: &Rc<RefCell<storage::SessionStore>>,
 ) {
     let selected = tab_view.selected_page();
-    let records: Vec<storage::SessionTab> = states
-        .borrow()
-        .iter()
-        .filter(|state| state.mode == TabMode::Normal)
-        .enumerate()
-        .map(|(position, state)| storage::SessionTab {
+    let mut records: Vec<storage::SessionTab> = Vec::new();
+    let mut skipped = 0usize;
+    for state in states.borrow().iter() {
+        if state.mode != TabMode::Normal {
+            continue;
+        }
+        let url = current_state_url(state);
+        // One unusable tab must not cost the whole session. A tab whose URL is
+        // empty - a renderer that died before reporting one - is left out and
+        // counted, rather than handed to the store, which would refuse the batch
+        // and leave nothing saved at all.
+        if url.trim().is_empty() {
+            skipped += 1;
+            continue;
+        }
+        let position = records.len();
+        records.push(storage::SessionTab {
             id: position as i64 + 1,
             position: position as i64,
-            url: current_state_url(state),
+            url,
             title: state.title.borrow().clone(),
             selected: state.page.borrow().as_ref() == selected.as_ref(),
-        })
-        .collect();
+        });
+    }
+    if skipped > 0 {
+        eprintln!("save session: {skipped} tab(s) had no URL and were not saved");
+    }
     if let Err(error) = store.borrow_mut().save_normal(&records) {
         eprintln!("save session: {error}");
     }

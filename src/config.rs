@@ -51,6 +51,12 @@ pub struct Config {
     /// Downloads land here, inside the profile, never where a page asks.
     pub download_dir: PathBuf,
     pub start_url: String,
+    /// Whether `start_url` was asked for rather than defaulted to.
+    ///
+    /// The difference decides what happens when a session was saved *and* a URL
+    /// was given: a link a person clicked has to open, so the URL is not allowed
+    /// to be swallowed by the session that happened to be on disk.
+    pub start_url_given: bool,
     pub search_endpoint: Option<String>,
     pub restore_session: bool,
     pub smoke: bool,
@@ -81,6 +87,8 @@ impl Config {
         let mut cache_dir = None;
         let mut download_dir = None;
         let mut start_url = DEFAULT_URL.to_string();
+        let mut start_url_given = false;
+        let mut positional: Option<String> = None;
         let mut search_endpoint = None;
         let mut restore_session = true;
         let mut smoke = false;
@@ -123,6 +131,7 @@ impl Config {
                     start_url = args
                         .next()
                         .ok_or_else(|| CliError::usage("--start-url needs a URL"))?;
+                    start_url_given = true;
                 }
                 "--search-endpoint" => {
                     let endpoint = args
@@ -142,15 +151,36 @@ impl Config {
                         env!("CARGO_PKG_VERSION")
                     )));
                 }
-                other => {
+                other if other.starts_with('-') => {
                     return Err(CliError::usage(format!(
                         "unknown argument: {other}\n\n{}",
                         usage()
                     )));
                 }
+                // A bare URL, because that is what the desktop entry promises to
+                // hand over and what every other browser accepts: the entry is
+                // `Exec=browsrl %U`, so a link opened from a chat client or a
+                // file manager arrives as a plain positional argument. Treating it
+                // as an unknown flag made the installed app refuse every link
+                // pointed at it.
+                url => {
+                    if positional.is_some() {
+                        return Err(CliError::usage(format!(
+                            "only one URL can be opened at a time, got a second: {url}\n\n{}",
+                            usage()
+                        )));
+                    }
+                    positional = Some(url.to_string());
+                }
             }
         }
 
+        // A positional URL and --start-url mean the same thing, so the flag wins
+        // if both are given: it is the more explicit of the two.
+        if let Some(url) = positional.filter(|_| start_url == DEFAULT_URL) {
+            start_url = url;
+            start_url_given = true;
+        }
         let profile_dir = profile_dir.unwrap_or(default_profile);
         validate_path("--profile-dir", &profile_dir)?;
         let database_path = database_path.unwrap_or_else(|| profile_dir.join("session.sqlite"));
@@ -169,6 +199,7 @@ impl Config {
             cache_dir,
             download_dir,
             start_url,
+            start_url_given,
             search_endpoint,
             restore_session,
             smoke,
@@ -254,9 +285,9 @@ fn ensure_private_directory(path: &Path) -> Result<(), String> {
 
 pub fn usage() -> String {
     concat!(
-        "Usage: browsrl [--profile-dir PATH] [--database-path PATH] [--data-dir PATH] ",
-        "[--cache-dir PATH] [--download-dir PATH] [--start-url URL] ",
-        "[--search-endpoint URL] [--no-restore] ",
+        "Usage: browsrl [URL] [--profile-dir PATH] [--database-path PATH] ",
+        "[--data-dir PATH] [--cache-dir PATH] [--download-dir PATH] ",
+        "[--start-url URL] [--search-endpoint URL] [--no-restore] ",
         "[--smoke] [--storage-check]"
     )
     .to_string()

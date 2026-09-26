@@ -456,6 +456,38 @@ def main() -> int:
         {"rule": focus_rule, "parsing": parsing, "application_id": gui.APPLICATION_ID},
     )
 
+    # The desktop entry is `Exec=browsrl %U`, so a link opened from another
+    # application arrives as a bare positional URL. The installed app used to
+    # refuse exactly that, which broke every link pointed at it.
+    positional = run_browser(
+        "--smoke", "--profile-dir", str(pathlib.Path(tempfile.mkdtemp(prefix=PROFILE_PREFIX))),
+        "example.com",
+    )
+    positional_json = json.loads(positional.stdout)
+    two_urls = run_browser(
+        "--smoke", "--profile-dir", str(pathlib.Path(tempfile.mkdtemp(prefix=PROFILE_PREFIX))),
+        "https://one.example/", "https://two.example/", expect_code=2,
+    )
+    flag_wins = run_browser(
+        "--smoke", "--profile-dir", str(pathlib.Path(tempfile.mkdtemp(prefix=PROFILE_PREFIX))),
+        "--start-url", "https://explicit.example/", "https://positional.example/",
+    )
+    record(
+        checks,
+        "a_bare_url_is_accepted_like_every_other_browser",
+        positional_json.get("requested") == "https://example.com/"
+        and positional_json.get("ok") is True
+        and two_urls.returncode == 2
+        and "only one URL" in two_urls.stderr
+        and json.loads(flag_wins.stdout).get("requested") == "https://explicit.example/",
+        {
+            "requested": positional_json.get("requested"),
+            "two_urls_code": two_urls.returncode,
+            "two_urls_error": two_urls.stderr.strip()[:120],
+            "flag_wins": json.loads(flag_wins.stdout).get("requested"),
+        },
+    )
+
     passed = all(bool(check["passed"]) for check in checks)
     report = {
         "passed": passed,

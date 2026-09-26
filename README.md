@@ -15,7 +15,7 @@ missing is listed as deferred below rather than stubbed out.
 
 | Area | What works today |
 | --- | --- |
-| Tabs | Add, close, cycle with wrap-around, per-tab back/forward/reload, dense re-numbering, last tab resets instead of closing |
+| Tabs | Add, close, cycle with wrap-around, per-tab back/forward/reload, dense re-numbering, last tab resets instead of closing. The window title follows the page in front |
 | Navigation | Strict `http`/`https`/`about:blank` allowlist, bare hosts normalised to HTTPS, opt-in search |
 | Privacy | Private tabs on an ephemeral network session: never restored, never bookmarked, never in history |
 | Bookmarks | Star toggle in the toolbar or `Ctrl+D`, deduplicated by URL, `file:` and other schemes refused |
@@ -29,8 +29,8 @@ missing is listed as deferred below rather than stubbed out.
 | Site permissions | Every capability request is refused until it is answered: an `AdwAlertDialog` defaults to Deny, and dismissing it denies |
 | Clear browsing data | `Ctrl+Shift+Delete` empties the history table and clears WebKit's cookies, storage and caches for the profile's session |
 | Load failures | A failed load names the URL and the error in the status line instead of leaving a blank page |
-| Crashed pages | A web process that dies is reported with the reason and a reload hint |
-| Session | Tabs and the selected tab restored on launch, saved on every tab switch, tab close and window close |
+| Crashed pages | A web process that dies is reported with the reason; the toolbar's reload control is an icon, not a word |
+| Session | Tabs and the selected tab restored on launch, saved on startup, on every tab switch, on tab close and on window close. A `quit` action closes cleanly, which is the only way the session is written on the way out |
 | Keyboard | `Ctrl+T` `Ctrl+Shift+N` `Ctrl+Shift+P` `Ctrl+W` `Ctrl+Shift+T` `Ctrl+Tab` `Ctrl+Shift+Tab` `Ctrl+L` `Ctrl+R` `F5` `Ctrl+D` `Ctrl+Shift+B` `Ctrl+H` `Ctrl+Shift+R` `Ctrl++` `Ctrl+-` `Ctrl+0` `Ctrl+P` `Ctrl+C` `Ctrl+Shift+Delete` |
 | Profile | One local directory, `0700`/`0600`, SQLite schema with in-place migration |
 
@@ -123,6 +123,7 @@ Usage: browsrl [--profile-dir PATH] [--database-path PATH] [--data-dir PATH]
 | `--profile-dir` | Profile root; defaults to `$XDG_DATA_HOME/browsrl`. |
 | `--database-path`, `--data-dir`, `--cache-dir` | Override individual paths inside the profile. |
 | `--start-url` | URL for the first tab; defaults to `about:blank`. |
+| `[URL]` | A single URL to open, exactly like every other browser. This is what the desktop entry's `%u` hands over when a link is opened from another application. One link at a time: a second URL is refused with a message rather than silently ignored, and the entry asks for `%u` rather than `%U` so it never promises more than the app delivers. A URL given at launch is **not** swallowed by a saved session: the session is restored and the URL opens on top of it, selected, the way the other browsers behave. |
 | `--search-endpoint` | Enables `search:` queries. Without it, search text is rejected instead of being sent anywhere. Must be `https`, except for a loopback host such as a local SearxNG. |
 | `--no-restore` | Ignore stored tabs and start from `--start-url`. |
 | `--smoke` | Head-less contract path: validate the URL, write one session row, read it back, print JSON. |
@@ -341,6 +342,13 @@ behind them.
   it is answered. The dialog opens on Deny, closing it denies, and the answer is
   not remembered, so a site has to ask again.
 * Wayland is preferred by the native GTK stack, with the GTK X11 fallback.
+* Video and audio depend entirely on the GStreamer plugins WebKitGTK finds on the
+  machine. On a system without an audio sink, WebKitGTK 6.0 reports
+  `GStreamer element autoaudiosink not found`, logs a NULL-pointer warning from
+  inside the web process and then **crashes the renderer**; the shell reports the
+  crash rather than pretending the page is fine. Measured here on Arch, where
+  `gst-plugins-good` was not installed. Installing it is a system package
+  decision, so it is not done automatically.
 
 Deliberately not implemented:
 
@@ -386,11 +394,27 @@ make install DESTDIR=/tmp/stage       # staging only, touches nothing
 make uninstall PREFIX=$HOME/.local
 ```
 
+Installing is what makes the app *findable*: the entry lands in
+`share/applications` and the icon in the hicolor theme, and `make install`
+rebuilds the desktop-entry database and the icon cache afterwards, because a
+desktop environment shows neither until those caches are refreshed. With
+`PREFIX=$HOME/.local` no root is needed, and `~/.local/bin` is on the session
+`PATH`, so the `Exec=browsrl %u` line resolves for a launcher-started app. After
+installing, the app appears in the application launcher under **Browsrl** and
+opens with its icon.
+
+The first run creates its profile at `$XDG_DATA_HOME/browsrl` — a fresh profile,
+not the old `rbrowse` directory.
+
 The desktop entry registers the `http` and `https` handlers, so Browsrl can
-open links handed to it by other applications. `make packaging` validates the
-entry with `desktop-file-validate` and the metadata with `appstreamcli`; the one
-accepted AppStream warning is the missing project homepage, because this
-repository has no public URL yet.
+open links handed to it by other applications, one link at a time. Installing
+does **not** make it the default browser: that is
+`xdg-settings set default-web-browser io.github.browsrl.Browsrl.desktop`, and it
+is left to you on purpose, since taking over link handling is not something an
+installer should do behind your back. `make packaging` validates the entry with
+`desktop-file-validate` and the metadata with `appstreamcli`; the one accepted
+AppStream warning is the missing project homepage, because this repository has
+no public URL yet.
 
 ## PlantUML assets
 

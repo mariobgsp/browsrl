@@ -127,6 +127,14 @@ install: build-release
 		$(DATADIR)/metainfo/$(APP_ID).metainfo.xml
 	install -Dm644 $(ASSETS)/browsrl-128.png \
 		$(DATADIR)/icons/hicolor/128x128/apps/browsrl.png
+	@# The files are in place, but a desktop environment will not show the entry
+	@# or find the icon until its caches are rebuilt, so "installed" has to include
+	@# this or the launcher stays empty. Both tools are optional: a system without
+	@# them still gets the files.
+	@command -v update-desktop-database >/dev/null 2>&1 && \
+		update-desktop-database "$(DATADIR)/applications" || true
+	@command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+		gtk-update-icon-cache -f -t "$(DATADIR)/icons/hicolor" || true
 	@echo "installed to $(DESTDIR)$(PREFIX)"
 
 uninstall:
@@ -135,4 +143,8 @@ uninstall:
 	rm -f $(DATADIR)/metainfo/$(APP_ID).metainfo.xml
 	rm -f $(DATADIR)/icons/hicolor/128x128/apps/browsrl.png
 	@rmdir $(DATADIR)/icons/hicolor/128x128/apps $(DATADIR)/icons/hicolor/128x128 2>/dev/null || true
+	@command -v update-desktop-database >/dev/null 2>&1 && \
+		update-desktop-database "$(DATADIR)/applications" || true
+	@command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+		gtk-update-icon-cache -f -t "$(DATADIR)/icons/hicolor" || true
 	@echo "removed from $(DESTDIR)$(PREFIX)"

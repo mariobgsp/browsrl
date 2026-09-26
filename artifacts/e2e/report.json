@@ -253,6 +253,16 @@
       },
       "name": "keyboard_focus_rule_is_correct",
       "passed": true
+    },
+    {
+      "details": {
+        "flag_wins": "https://explicit.example/",
+        "requested": "https://example.com/",
+        "two_urls_code": 2,
+        "two_urls_error": "only one URL can be opened at a time, got a second: https://two.example/\n\nUsage: browsrl [URL] [--profile-dir PATH] [--d"
+      },
+      "name": "a_bare_url_is_accepted_like_every_other_browser",
+      "passed": true
     }
   ],
   "network": "loopback fixtures only",

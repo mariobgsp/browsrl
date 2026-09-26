@@ -502,15 +502,21 @@ def press_until(
 
 
 class Browser:
-    def __init__(self, profile: pathlib.Path, url: str) -> None:
+    def __init__(self, profile: pathlib.Path, url: str | None) -> None:
         self.profile = profile
         self.log = tempfile.NamedTemporaryFile(  # a file, not a pipe: an undrained
             prefix=LOG_PREFIX,  # pipe would block the browser mid-test
             suffix=".log",
             delete=False,
         )
+        arguments = [str(BINARY), "--profile-dir", str(profile)]
+        # No URL means "reopen the browser", which is what a person does and what
+        # a session-restore check has to test. Passing a URL is a *different*
+        # thing: it opens that page on top of the restored session.
+        if url is not None:
+            arguments += ["--start-url", url]
         self.process = subprocess.Popen(
-            [str(BINARY), "--profile-dir", str(profile), "--start-url", url],
+            arguments,
             cwd=ROOT,
             stdout=self.log,
             stderr=subprocess.STDOUT,
@@ -577,7 +583,7 @@ def main() -> int:
                 "previous-tab", "reload", "bookmark", "bookmarks", "history",
                 "focus-address", "copy-page-address", "readability",
                 "zoom-in", "zoom-out", "zoom-reset", "print", "restore-closed",
-                "clear-browsing-data",
+                "clear-browsing-data", "quit",
             }
             registered = set(action_names())
             check(
@@ -1004,7 +1010,7 @@ def main() -> int:
             # anything.
             saved = session_tabs(profile)
             browser.stop()
-            browser = Browser(profile, "about:blank")
+            browser = Browser(profile, None)
             restored = wait_for(
                 lambda: [url for _, url, _ in session_tabs(profile)]
                 == [url for _, url, _ in saved],
@@ -1016,6 +1022,30 @@ def main() -> int:
                 {
                     "saved": saved,
                     "after_relaunch": session_tabs(profile),
+                    "log": browser.output()[-300:],
+                },
+            )
+
+            # A URL given at launch must not be swallowed by a session that
+            # happens to be on disk. Getting this wrong makes a click look like
+            # it did nothing: the old tabs come back and the page asked for never
+            # appears.
+            saved_now = session_tabs(profile)
+            link = f"{server.base_url}/one.html"
+            browser.stop()
+            browser = Browser(profile, link)
+            opened = wait_for(
+                lambda: link in [url for _, url, _ in session_tabs(profile)],
+                seconds=30,
+            )
+            after_link = session_tabs(profile)
+            check(
+                "a_url_given_at_launch_opens_even_with_a_saved_session",
+                opened and len(after_link) == len(saved_now) + 1,
+                {
+                    "url": link,
+                    "before": saved_now,
+                    "after": after_link,
                     "log": browser.output()[-300:],
                 },
             )
