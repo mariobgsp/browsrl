@@ -50,6 +50,8 @@ pub struct Config {
     pub cache_dir: PathBuf,
     /// Downloads land here, inside the profile, never where a page asks.
     pub download_dir: PathBuf,
+    /// The cookie store WebKit is pointed at, inside the data directory.
+    pub cookie_path: PathBuf,
     pub start_url: String,
     /// A bookmarks file to import, as a maintenance command rather than a
     /// window: it is the one job that has to work while the browser is closed.
@@ -201,6 +203,10 @@ impl Config {
         let data_dir = data_dir.unwrap_or_else(|| profile_dir.join("data"));
         let cache_dir = cache_dir.unwrap_or_else(|| profile_dir.join("cache"));
         let download_dir = download_dir.unwrap_or_else(|| profile_dir.join("downloads"));
+        // Not an override: WebKit only persists cookies when the browser names
+        // the file itself, so this one is the profile's own and always lives in
+        // the data directory.
+        let cookie_path = data_dir.join("cookies.txt");
         validate_path("--database-path", &database_path)?;
         validate_path("--data-dir", &data_dir)?;
         validate_path("--cache-dir", &cache_dir)?;
@@ -212,6 +218,7 @@ impl Config {
             data_dir,
             cache_dir,
             download_dir,
+            cookie_path,
             start_url,
             start_url_given,
             import_bookmarks,
@@ -239,14 +246,14 @@ impl Config {
     }
 
     pub fn ensure_profile_dirs(&self) -> Result<(), String> {
-        ensure_private_directory(&self.profile_dir)?;
-        ensure_private_directory(&self.data_dir)?;
-        ensure_private_directory(&self.cache_dir)?;
-        ensure_private_directory(&self.download_dir)?;
+        private_directory(&self.profile_dir)?;
+        private_directory(&self.data_dir)?;
+        private_directory(&self.cache_dir)?;
+        private_directory(&self.download_dir)?;
         if let Some(parent) = self.database_path.parent()
             && parent.starts_with(&self.profile_dir)
         {
-            ensure_private_directory(parent)?;
+            private_directory(parent)?;
         }
         Ok(())
     }
@@ -331,19 +338,43 @@ fn adopt_previous_profile(data_home: &Path) -> PathBuf {
     current
 }
 
+/// The modes the profile's own files and directories carry. They are named here
+/// so the module that creates a file and the module that re-hardens it cannot
+/// drift apart, and so the policy has one owner to read.
 #[cfg(unix)]
-fn ensure_private_directory(path: &Path) -> Result<(), String> {
+pub const FILE_MODE: u32 = 0o600;
+#[cfg(unix)]
+pub const DIRECTORY_MODE: u32 = 0o700;
+
+/// Create a directory inside the profile, and keep it owner-only.
+#[cfg(unix)]
+pub fn private_directory(path: &Path) -> Result<(), String> {
     std::fs::create_dir_all(path)
         .map_err(|error| format!("create private directory {}: {error}", path.display()))?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(DIRECTORY_MODE))
         .map_err(|error| format!("protect directory {}: {error}", path.display()))?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn ensure_private_directory(path: &Path) -> Result<(), String> {
+pub fn private_directory(path: &Path) -> Result<(), String> {
     std::fs::create_dir_all(path)
         .map_err(|error| format!("create directory {}: {error}", path.display()))
+}
+
+/// Re-harden a file the profile owns, whatever mode it arrived with. Used for
+/// the files something else creates inside the profile — SQLite's sidecars, a
+/// finished download, the cookie store — because those are made by another
+/// writer under the process umask and only tightened afterwards.
+#[cfg(unix)]
+pub fn private_file(path: &Path) -> Result<(), String> {
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(FILE_MODE))
+        .map_err(|error| format!("protect file {}: {error}", path.display()))
+}
+
+#[cfg(not(unix))]
+pub fn private_file(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 pub fn usage() -> String {

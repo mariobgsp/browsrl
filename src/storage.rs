@@ -4,10 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use url::Url;
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
-use crate::{bookmarks, history};
+use crate::{bookmarks, config, history};
 
 /// Bumped whenever the tables below change; `migrate_schema` refuses to open a
 /// database written by a newer build.
@@ -36,7 +33,7 @@ impl SessionStore {
                 .map_err(|error| format!("create profile directory: {error}"))?;
             // Only directories this process created are hardened; an existing
             // one may legitimately be shared with the user.
-            ensure_private_directory(parent)?;
+            config::private_directory(parent)?;
         }
         create_private_file(path)?;
         let mut connection = Connection::open(path)
@@ -319,7 +316,7 @@ fn create_private_file(path: &Path) -> Result<(), String> {
         .create(true)
         .write(true)
         .truncate(false)
-        .mode(0o600)
+        .mode(config::FILE_MODE)
         .open(path)
         .map(|_| ())
         .map_err(|error| format!("create session database {}: {error}", path.display()))
@@ -335,25 +332,11 @@ fn create_private_file(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(unix)]
-fn ensure_private_directory(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-        .map_err(|error| format!("protect directory {}: {error}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn ensure_private_directory(_path: &Path) -> Result<(), String> {
-    Ok(())
-}
-
 /// Keep the database and its write-ahead log readable only by the owner.
 ///
 /// The `-wal` and `-shm` sidecars hold the same URLs and titles as the
 /// database, and SQLite creates them with the process umask rather than with
 /// the database file's mode, so they are hardened explicitly.
-#[cfg(unix)]
 fn protect_database_files(path: &Path) -> Result<(), String> {
     for name in [
         path.to_path_buf(),
@@ -363,8 +346,7 @@ fn protect_database_files(path: &Path) -> Result<(), String> {
         if !name.exists() {
             continue;
         }
-        fs::set_permissions(&name, fs::Permissions::from_mode(0o600))
-            .map_err(|error| format!("protect session database {}: {error}", name.display()))?;
+        config::private_file(&name)?;
     }
     Ok(())
 }
@@ -373,9 +355,4 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_os_string();
     name.push(suffix);
     PathBuf::from(name)
-}
-
-#[cfg(not(unix))]
-fn protect_database_files(_path: &Path) -> Result<(), String> {
-    Ok(())
 }

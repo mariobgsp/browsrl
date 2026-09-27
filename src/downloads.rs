@@ -6,7 +6,6 @@
 //! safe leaf name before it is joined to the destination: no path separators,
 //! no parent references, and no leading dot that would hide the file.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// Refuse anything that could escape the download directory or overwrite
@@ -74,16 +73,6 @@ pub fn reserve(
         return Ok(candidate);
     }
     Err("no free download name was found".to_string())
-}
-
-/// Make a finished download private to its owner.
-///
-/// WebKit creates the file with whatever the process umask allows, so the mode
-/// is set here rather than by a placeholder that the download could not then
-/// write to: 0600, because a download can be anything and is not world readable
-/// even inside the profile.
-pub fn restrict_mode(path: &Path) -> std::io::Result<()> {
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
 }
 
 fn split_extension(leaf: &str) -> (String, Option<String>) {
