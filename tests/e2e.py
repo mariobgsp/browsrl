@@ -23,20 +23,18 @@ from harness import (
     LocalFixtureServer,
     ROOT,
     read_database,
+    record,
     run_browser,
     run_browser_smoke,
     run_browser_storage_check,
     temporary_profile,
     write_legacy_v1_database,
+    write_report,
 )
 
 
 REPORT = ROOT / "artifacts" / "e2e" / "report.json"
 SMOKE_PREFIX = "smoke check failed: "
-
-
-def record(checks: list[dict[str, object]], name: str, passed: bool, details: dict[str, object]) -> None:
-    checks.append({"name": name, "passed": bool(passed), "details": details})
 
 
 def mode_of(path: pathlib.Path) -> str:
@@ -225,7 +223,7 @@ def main() -> int:
         # Permission hardening has to be able to fail, so the profile is seeded
         # world-readable first; a fresh mkdtemp is already 0700 and would make
         # the check vacuous.
-        loose = pathlib.Path(tempfile_dir := profile / "loose")
+        loose = profile / "loose"
         loose.mkdir()
         (loose / "data").mkdir()
         (loose / "cache").mkdir()
@@ -549,8 +547,7 @@ def main() -> int:
             " WebKitAutomationSession::create-web-view, which webkit6 0.6.1 does not expose",
         ],
     }
-    REPORT.parent.mkdir(parents=True, exist_ok=True)
-    REPORT.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report(REPORT, report)
     # A one-line summary keeps the output readable for a person and gives an
     # automated test-count parser something to count.
     if passed:

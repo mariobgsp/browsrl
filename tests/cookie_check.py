@@ -18,13 +18,12 @@ import os
 import pathlib
 import subprocess
 import sys
-import tempfile
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 
-from harness import LocalFixtureServer, temporary_profile  # noqa: E402
+from harness import Browser, LocalFixtureServer, temporary_profile  # noqa: E402
 
 BINARY = ROOT / "target" / "debug" / "brwsl"
 APP_ID = "io.github.brwsl.Brwsl"
@@ -53,16 +52,9 @@ def wait_for(predicate, seconds=25.0, interval=0.5):
 
 
 def open_browser(profile, *arguments):
-    # The app's own stderr, in a private temporary file of its own. The fixed
-    # path under /tmp/opencode this used to use was shared and world-writable,
-    # so another user could have put something there, and the test crashed
-    # outright on a machine where that directory did not exist.
-    handle, _log_path = tempfile.mkstemp(prefix="brwsl-cookie-", suffix=".log")
-    with os.fdopen(handle, "a") as log:
-        process = subprocess.Popen(
-            [str(BINARY), "--profile-dir", str(profile), *arguments],
-            cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, env=env,
-        )
+    # The argv, the relocated-prefix environment and the private log file all
+    # come from the harness, which is the one place they are written down.
+    process = Browser("--profile-dir", str(profile), *arguments).spawn()
     # Readiness is the process being alive and owning the application name, which
     # is the moment its window is built. Enumerating the actions with
     # `org.gtk.Actions.List` used to be the signal, and it is not: on this

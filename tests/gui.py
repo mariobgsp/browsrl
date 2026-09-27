@@ -17,6 +17,7 @@ and ``wtype``; it is deliberately not part of ``make gate``.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import pathlib
@@ -28,14 +29,18 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import Any
 
 from harness import (
     BINARY,
     PROFILE_PREFIX,
     LocalFixtureServer,
     ROOT,
+    print_checks,
     read_database,
+    record,
     temporary_profile,
+    write_report,
 )
 
 
@@ -108,10 +113,8 @@ def clear_leftovers() -> None:
     listing = subprocess.run(["pgrep", "-f", str(BINARY)], capture_output=True, text=True)
     mine = [pid for pid in listing.stdout.split() if is_own_leftover(pid)]
     for pid in mine:
-        try:
+        with contextlib.suppress(ProcessLookupError):
             os.kill(int(pid), signal.SIGTERM)
-        except ProcessLookupError:
-            pass
     if mine:
         time.sleep(1.5)
 
@@ -125,7 +128,7 @@ class WtypeFailed(RuntimeError):
 # an editor or a person is on the keyboard would type a URL and press Return
 # into their window. A refused press fails the check that wanted it, which is the
 # right outcome: a missing keystroke is recoverable, a mangled terminal is not.
-KEYBOARD: dict[str, object] = {
+KEYBOARD: dict[str, Any] = {
     "focus_known": False,
     "foreign_focus_refusals": 0,
     "delivery_failures": 0,
@@ -581,9 +584,6 @@ def main() -> int:
     clear_leftovers()
     checks: list[dict[str, object]] = []
 
-    def check(name: str, passed: bool, details: dict) -> None:
-        checks.append({"name": name, "passed": bool(passed), "details": details})
-
     with LocalFixtureServer() as server, temporary_profile() as profile_dir:
         profile = pathlib.Path(profile_dir)
         first = f"{server.base_url}/one.html"
@@ -607,7 +607,7 @@ def main() -> int:
                 "clear-browsing-data", "import-bookmarks", "quit",
             }
             registered = set(action_names())
-            check(
+            record(checks, 
                 "every_expected_action_is_registered",
                 expected_actions <= registered,
                 {
@@ -616,7 +616,7 @@ def main() -> int:
                 },
             )
 
-            check(
+            record(checks, 
                 "window_starts_and_creates_schema",
                 browser.alive()
                 and all(name in tables for name in ("bookmarks", "history", "session_tabs")),
@@ -629,7 +629,7 @@ def main() -> int:
             first_load = wait_for(
                 lambda: first in query(profile, "SELECT url FROM history"), seconds=45
             )
-            check(
+            record(checks, 
                 "start_url_reaches_history",
                 first_load,
                 {"history": query(profile, "SELECT url FROM history")},
@@ -641,7 +641,7 @@ def main() -> int:
             after_first = query(profile, "SELECT url FROM bookmarks")
             press_until("d", lambda: query(profile, "SELECT url FROM bookmarks") == [], ctrl=True)
             after_second = query(profile, "SELECT url FROM bookmarks")
-            check(
+            record(checks, 
                 "ctrl_d_bookmarks_and_unbookmarks_the_page",
                 after_first == [first] and after_second == [],
                 {
@@ -658,7 +658,7 @@ def main() -> int:
             # so every attempt fails and the check fails with it.
             navigated = navigate_to(second, profile, attempts=4)
             history = query(profile, "SELECT url FROM history ORDER BY id")
-            check(
+            record(checks, 
                 "ctrl_l_typing_and_enter_navigates",
                 navigated,
                 {"history": history, "expected_to_contain": second},
@@ -700,7 +700,7 @@ def main() -> int:
             after_reload = press("l", ctrl=True) and press("Down")
             time.sleep(1.5)
             still_askable = offered() > (before + 1 + (1 if put_away else 0))
-            check(
+            record(checks, 
                 "the_field_offers_addresses_only_when_asked",
                 typed
                 and not offered_by_typing
@@ -729,7 +729,7 @@ def main() -> int:
                 lambda: path_hits(server.requested, "/two.html") > before_reload,
                 seconds=20,
             )
-            check(
+            record(checks, 
                 "reload_refetches_the_current_page",
                 reloaded,
                 {
@@ -753,7 +753,7 @@ def main() -> int:
                 lambda: [url for _, url, _ in session_tabs(profile)] == [second],
                 seconds=20,
             )
-            check(
+            record(checks, 
                 "closing_a_tab_removes_it_from_the_saved_session",
                 two_tabs and after_close,
                 {
@@ -775,7 +775,7 @@ def main() -> int:
                 attempts=3,
                 settle=3.0,
             )
-            check(
+            record(checks, 
                 "a_closed_tab_is_reopened_by_ctrl_shift_t",
                 restored,
                 {"expected_two_tabs": 2, "session": session_tabs(profile)},
@@ -798,7 +798,7 @@ def main() -> int:
             returned = wait_for(
                 lambda: selected_url(profile) == before_cycle, seconds=15
             )
-            check(
+            record(checks, 
                 "tab_cycling_moves_the_selected_tab",
                 tabs_open > 1 and moved and returned,
                 {
@@ -823,7 +823,7 @@ def main() -> int:
                 lambda: "/private-tab-loaded" in server.requested, seconds=20
             )
             time.sleep(1.5)
-            check(
+            record(checks, 
                 "a_private_tab_is_never_written_to_the_profile",
                 private_loaded
                 and private_url not in query(profile, "SELECT url FROM history")
@@ -853,7 +853,7 @@ def main() -> int:
                 str(path)
                 for path in profile.parent.glob("evil-payload.txt")
             )
-            check(
+            record(checks, 
                 "a_download_is_sanitised_into_the_profile",
                 arrived
                 and download.read_text(encoding="utf-8") == "payload\n"
@@ -902,7 +902,7 @@ def main() -> int:
             after_toggle = {
                 path for path in server.requested if path.startswith("/measure-")
             }
-            check(
+            record(checks, 
                 "the_readability_pass_changes_the_page_layout",
                 bool(changed) and len(after_toggle) > len(before_readable),
                 {
@@ -918,7 +918,7 @@ def main() -> int:
             copied = wait_for(
                 lambda: (clipboard_text() or "") == measure_url, seconds=10
             )
-            check(
+            record(checks, 
                 "copy_page_address_reaches_the_clipboard",
                 copied,
                 {"expected": measure_url, "clipboard": clipboard_text()},
@@ -935,7 +935,7 @@ def main() -> int:
                 and dead_url in browser.output(),
                 seconds=20,
             )
-            check(
+            record(checks, 
                 "a_failed_load_names_the_url_and_the_error",
                 reported,
                 {
@@ -988,7 +988,7 @@ def main() -> int:
                 verified = answered and len(outcomes) == 1 and not granted
             else:
                 verified = not granted
-            check(
+            record(checks, 
                 "a_capability_request_is_refused_by_default",
                 page_loaded and verified,
                 {
@@ -1015,7 +1015,7 @@ def main() -> int:
             crash_reported = bool(killed) and wait_for(
                 lambda: "stopped responding" in browser.output(), seconds=25
             )
-            check(
+            record(checks, 
                 "a_dead_web_process_is_reported",
                 crash_reported,
                 {
@@ -1029,7 +1029,7 @@ def main() -> int:
             activate("clear-browsing-data")
             time.sleep(3)
             after_clear = query(profile, "SELECT url FROM history")
-            check(
+            record(checks, 
                 "clear_browsing_data_erases_history",
                 bool(before_clear) and after_clear == [],
                 {
@@ -1064,7 +1064,7 @@ def main() -> int:
                 settle=2.0,
             )
             after_windows = our_toplevels()
-            check(
+            record(checks, 
                 "ctrl_shift_b_opens_the_bookmarks_window",
                 bool(our_toplevels()) and len(after_windows) > before_windows,
                 {
@@ -1075,7 +1075,7 @@ def main() -> int:
                 },
             )
 
-            check(
+            record(checks, 
                 "actions_and_keys_leave_the_window_alive",
                 browser.alive(),
                 {"alive": browser.alive(), "log": browser.output()[-400:]},
@@ -1094,7 +1094,7 @@ def main() -> int:
                 == [url for _, url, _ in saved],
                 seconds=30,
             )
-            check(
+            record(checks, 
                 "a_relaunch_restores_the_saved_tabs",
                 restored and bool(saved),
                 {
@@ -1117,7 +1117,7 @@ def main() -> int:
                 seconds=30,
             )
             after_link = session_tabs(profile)
-            check(
+            record(checks, 
                 "a_url_given_at_launch_opens_even_with_a_saved_session",
                 opened and len(after_link) == len(saved_now) + 1,
                 {
@@ -1131,7 +1131,7 @@ def main() -> int:
             # Input could not be delivered at all, so the key-press checks above
             # never got a fair run. Record that as its own failure instead of
             # aborting, so the report still lists what did pass.
-            check(
+            record(checks, 
                 "key_presses_reached_the_window",
                 False,
                 {"error": str(error), "log": browser.output()[-400:]},
@@ -1176,9 +1176,8 @@ def main() -> int:
         ],
     }
     REPORT.parent.mkdir(parents=True, exist_ok=True)
-    REPORT.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    for item in checks:
-        print(("PASS" if item["passed"] else "FAIL"), item["name"])
+    write_report(REPORT, report)
+    print_checks(checks)
     return 0 if passed else 1
 
 

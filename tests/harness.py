@@ -100,7 +100,7 @@ class LocalFixtureServer:
         """Every path served so far, in order, with query strings dropped."""
         return self.request_log.paths()
 
-    def __enter__(self) -> "LocalFixtureServer":
+    def __enter__(self) -> LocalFixtureServer:
         self._thread.start()
         return self
 
@@ -126,24 +126,75 @@ def cargo_environment() -> dict[str, str]:
     return environment
 
 
+def record(checks: list[dict[str, object]], name: str, passed: bool, details: dict[str, object]) -> None:
+    """Add one check to the report a contract is building.
+
+    Every contract speaks this shape, so the report on disk has one owner and a
+    new check cannot invent a field of its own.
+    """
+    checks.append({"name": name, "passed": bool(passed), "details": details})
+
+
+def print_checks(checks: list[dict[str, object]]) -> None:
+    for item in checks:
+        print(("PASS" if item["passed"] else "FAIL"), item["name"])
+
+
+def write_report(path: pathlib.Path, report: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+class Browser:
+    """The built binary, launched one way.
+
+    `run` waits and checks the exit code; `spawn` returns the live process for a
+    check that has to keep the window open. Both build the argv, the environment
+    and the log file in one place, so a relocated `WEBKIT_PREFIX` and the private
+    per-process log are not re-decided by each contract.
+    """
+
+    def __init__(self, *arguments: str) -> None:
+        if not BINARY.exists():
+            raise SystemExit(f"missing {BINARY}; run `make build` first")
+        self.arguments = arguments
+
+    def run(self, expect_code: int | None = 0) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run(
+            [str(BINARY), *self.arguments],
+            cwd=ROOT,
+            env=cargo_environment(),
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_SECONDS,
+        )
+        if expect_code is not None and result.returncode != expect_code:
+            raise SystemExit(
+                f"expected exit {expect_code}, got {result.returncode}: {result.stderr[-400:]}"
+            )
+        return result
+
+    def spawn(self) -> subprocess.Popen[str]:
+        # The app's own stderr goes to a private temporary file of its own. A
+        # fixed path under /tmp would be shared and world-writable, so another
+        # user could have put something there.
+        handle, log_path = tempfile.mkstemp(prefix="brwsl-", suffix=".log")
+        with os.fdopen(handle, "a") as log:
+            process = subprocess.Popen(
+                [str(BINARY), *self.arguments],
+                cwd=ROOT,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                env=cargo_environment(),
+                text=True,
+            )
+        self.log_path = pathlib.Path(log_path)
+        return process
+
+
 def run_browser(*arguments: str, expect_code: int | None = 0) -> subprocess.CompletedProcess[str]:
     """Run the built binary and optionally assert its exit code."""
-    if not BINARY.exists():
-        raise SystemExit(f"missing {BINARY}; run `make build` first")
-    result = subprocess.run(
-        [str(BINARY), *arguments],
-        cwd=ROOT,
-        env=cargo_environment(),
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT_SECONDS,
-    )
-    if expect_code is not None and result.returncode != expect_code:
-        raise SystemExit(
-            f"expected exit {expect_code} from {' '.join(arguments)}, "
-            f"got {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-    return result
+    return Browser(*arguments).run(expect_code=expect_code)
 
 
 def run_browser_smoke(profile: pathlib.Path, url: str) -> subprocess.CompletedProcess[str]:
